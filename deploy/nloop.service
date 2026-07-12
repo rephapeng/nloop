@@ -1,0 +1,15 @@
+[Unit]
+Description=nloop — loop engineering engine + dashboard
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+WorkingDirectory=/opt/nloop
+ExecStart=/opt/nloop/run.sh
+Restart=on-failure
+RestartSec=3
+User=root
+
+[Install]
+WantedBy=multi-user.target
