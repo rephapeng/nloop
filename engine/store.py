@@ -117,6 +117,27 @@ class Store:
         )
         self.db.commit()
 
+    def claim_queued(self) -> str | None:
+        """Ambil satu run 'queued' tertua secara atomic → status 'running'.
+
+        Dipanggil worker; UPDATE..RETURNING bikin aman walau nanti ada
+        lebih dari satu claimer.
+        """
+        cur = self.db.execute(
+            "UPDATE runs SET status='running' WHERE id="
+            "(SELECT id FROM runs WHERE status='queued' ORDER BY created_at LIMIT 1)"
+            " RETURNING id"
+        )
+        row = cur.fetchone()
+        self.db.commit()
+        return row["id"] if row else None
+
+    def requeue_running(self) -> int:
+        """Saat boot: run 'running' pasti orphan proses lama (crash/restart) → requeue."""
+        cur = self.db.execute("UPDATE runs SET status='queued' WHERE status='running'")
+        self.db.commit()
+        return cur.rowcount
+
     def request_stop(self, run_id: str) -> None:
         self.db.execute("UPDATE runs SET stop_requested=1 WHERE id=?", (run_id,))
         self.db.commit()

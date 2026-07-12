@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nloop server (Fase 0). Worker nyusul di Fase 3.
+# nloop server + worker (worker jalan di lifespan FastAPI).
 set -e
 cd "$(dirname "$0")"
 [ -d .venv ] && source .venv/bin/activate

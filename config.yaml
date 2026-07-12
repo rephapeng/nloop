@@ -8,6 +8,7 @@ loops:
   max_iterations: 10
   max_cost_usd: 5.0
   iteration_timeout_sec: 900
+  poll_interval_sec: 1.0   # worker polling queue
 
 claude:
   model: null              # null = default model CLI (subscription)

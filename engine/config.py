@@ -12,6 +12,7 @@ DEFAULTS = {
         "max_iterations": 10,
         "max_cost_usd": 5.0,
         "iteration_timeout_sec": 900,
+        "poll_interval_sec": 1.0,
     },
     "claude": {
         "model": None,
