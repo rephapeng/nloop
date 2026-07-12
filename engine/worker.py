@@ -16,7 +16,7 @@ log = logging.getLogger("nloop.worker")
 
 class Worker:
     def __init__(self, store, cfg: dict, on_event=None):
-        """on_event(run_id, type, payload) — opsional, buat event bus (Fase 4)."""
+        """on_event(run_id, event_dict) — opsional, dipakai buat publish ke EventBus."""
         self.store = store
         self.cfg = cfg
         self.on_event = on_event
@@ -55,7 +55,7 @@ class Worker:
 
     async def _run_one(self, run_id: str) -> None:
         forward = (
-            (lambda t, p: self.on_event(run_id, t, p)) if self.on_event else None
+            (lambda ev: self.on_event(run_id, ev)) if self.on_event else None
         )
         try:
             await loop.run_loop(run_id, self.store, self.cfg, on_event=forward)

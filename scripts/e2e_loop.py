@@ -49,9 +49,9 @@ async def main() -> None:
     )
     print(f"run={run_id} model={model} workdir={WS}")
 
-    def show(t: str, p: dict) -> None:
-        if t in ("verify", "result", "status"):
-            print(f"[{t}] {p}")
+    def show(ev: dict) -> None:
+        if ev["type"] in ("verify", "result", "status"):
+            print(f"[{ev['type']}] {ev['payload']}")
 
     status = await loop.run_loop(run_id, store, cfg, on_event=show)
     run = store.get_run(run_id)

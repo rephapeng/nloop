@@ -51,9 +51,9 @@ async def run_loop(run_id: str, store, cfg: dict, on_event=None) -> str:
     workdir = run["workdir"]
 
     def emit(type_: str, payload: dict) -> None:
-        store.add_event(run_id, type_, payload)
-        if on_event:
-            on_event(type_, payload)
+        event_id = store.add_event(run_id, type_, payload)
+        if on_event:  # id ikut dikirim → SSE bisa dedupe replay vs live
+            on_event({"id": event_id, "type": type_, "payload": payload})
 
     store.mark_started(run_id)
     emit("status", {"status": "running"})
