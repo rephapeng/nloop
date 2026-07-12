@@ -25,6 +25,7 @@ DEFAULTS = {
         "max_consecutive_errors": 2,     # N iterasi claude error beruntun → fail run
     },
     "memory": {"provider": "local"},
+    "triggers": {"token": None, "projects": {}},
     "paths": {"db": "nloop.db", "workspaces": "workspaces"},
 }
 

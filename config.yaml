@@ -20,8 +20,20 @@ claude:
   retries: 1                  # retry dalam-iterasi buat error transient
   max_consecutive_errors: 2   # iterasi error beruntun -> fail run
 
+# Reactive triggers: webhook Sentry/PostHog -> loop otomatis.
+# URL: POST /api/hooks/{sentry|posthog|generic}?project=<nama>&token=<token>
+triggers:
+  token: null              # WAJIB diisi string random kalau server-nya exposed
+  projects: {}
+  # projects:
+  #   marginin:
+  #     workdir: /opt/marginin
+  #     verify_cmd: "npm test"        # sesuaikan: command yang exit 0 kalau sehat
+  #     max_iterations: 8
+  #     max_cost_usd: 5.0
+
 memory:
-  provider: local          # local | selfmem  (Fase 7)
+  provider: local          # local | selfmem  (Fase 8)
 
 paths:
   db: nloop.db

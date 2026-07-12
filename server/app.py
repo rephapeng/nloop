@@ -14,11 +14,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from engine import config
+from engine import config, triggers
 from engine.events import EventBus
 from engine.store import Store
 from engine.worker import Worker
@@ -100,6 +100,45 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             raise HTTPException(404, "run tidak ditemukan")
         store.request_stop(run_id)  # loop cek flag ini antar iterasi
         return {"run_id": run_id, "stop_requested": True}
+
+    @app.post("/api/hooks/{source}", status_code=201)
+    async def webhook(source: str, request: Request, project: str,
+                      token: str | None = None):
+        """Sentry/PostHog/generic webhook → spawn loop (dedup per fingerprint)."""
+        trig = cfg.get("triggers", {})
+        if trig.get("token") and token != trig["token"]:
+            raise HTTPException(401, "token salah")
+        proj = (trig.get("projects") or {}).get(project)
+        if proj is None:
+            raise HTTPException(404, f"project '{project}' tidak terdaftar di triggers.projects")
+        if not os.path.isdir(proj.get("workdir", "")):
+            raise HTTPException(500, f"workdir project '{project}' tidak ada")
+
+        try:
+            payload = await request.json()
+        except Exception:
+            raise HTTPException(400, "payload bukan JSON valid")
+        issue = triggers.extract_issue(source, payload if isinstance(payload, dict) else {})
+
+        store: Store = request.app.state.store
+        existing = store.find_active_by_fingerprint(issue["fingerprint"])
+        if existing:  # issue sama masih dikerjain → jangan spawn dobel
+            return JSONResponse(status_code=200, content={
+                "run_id": existing, "deduped": True,
+                "fingerprint": issue["fingerprint"],
+            })
+
+        run_id = store.create_run(
+            triggers.build_goal(source, issue),
+            proj["verify_cmd"],
+            proj["workdir"],
+            model=proj.get("model") or cfg["claude"].get("model"),
+            max_iterations=proj.get("max_iterations") or cfg["loops"]["max_iterations"],
+            max_cost_usd=proj.get("max_cost_usd") or cfg["loops"]["max_cost_usd"],
+            fingerprint=issue["fingerprint"],
+        )
+        return {"run_id": run_id, "deduped": False,
+                "fingerprint": issue["fingerprint"], "title": issue["title"]}
 
     @app.get("/api/loops/{run_id}/events")
     async def stream_events(run_id: str, request: Request, after: int = 0):

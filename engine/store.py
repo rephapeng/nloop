@@ -62,7 +62,14 @@ class Store:
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        self._migrate()
         self.db.commit()
+
+    def _migrate(self) -> None:
+        """Migrasi ringan buat DB lama (SQLite: ADD COLUMN murah)."""
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(runs)")}
+        if "fingerprint" not in cols:  # Fase 7: dedup trigger webhook
+            self.db.execute("ALTER TABLE runs ADD COLUMN fingerprint TEXT")
 
     # ---- runs ----
 
@@ -75,16 +82,27 @@ class Store:
         model: str | None = None,
         max_iterations: int = 10,
         max_cost_usd: float = 5.0,
+        fingerprint: str | None = None,
     ) -> str:
         run_id = uuid.uuid4().hex[:12]
         self.db.execute(
             "INSERT INTO runs(id, goal, verify_cmd, workdir, model,"
-            " max_iterations, max_cost_usd, created_at) VALUES(?,?,?,?,?,?,?,?)",
+            " max_iterations, max_cost_usd, fingerprint, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?)",
             (run_id, goal, verify_cmd, workdir, model,
-             max_iterations, max_cost_usd, time.time()),
+             max_iterations, max_cost_usd, fingerprint, time.time()),
         )
         self.db.commit()
         return run_id
+
+    def find_active_by_fingerprint(self, fingerprint: str) -> str | None:
+        """Dedup trigger: run aktif (queued/running) dengan fingerprint sama."""
+        row = self.db.execute(
+            "SELECT id FROM runs WHERE fingerprint=? AND status IN ('queued','running')"
+            " LIMIT 1",
+            (fingerprint,),
+        ).fetchone()
+        return row["id"] if row else None
 
     def get_run(self, run_id: str) -> dict | None:
         row = self.db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
