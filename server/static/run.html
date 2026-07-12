@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>nloop — run</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-page="run">
+  <h1><a href="/">nloop</a> / <code id="run-id"></code></h1>
+
+  <div class="panel">
+    <p id="goal" style="margin:0 0 0.7rem;font-size:1.05rem"></p>
+    <div class="meta">
+      <span id="status-badge"></span>
+      <span>iterasi <b id="iter">-</b></span>
+      <span>cost <b id="cost">-</b></span>
+      <span>verify <code id="verify-cmd"></code></span>
+      <button id="stop" class="danger">Stop</button>
+    </div>
+  </div>
+
+  <h2>Live</h2>
+  <div id="live" class="panel"></div>
+
+  <h2>Timeline iterasi</h2>
+  <div id="iterations"><span style="color:var(--muted)">belum ada iterasi</span></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

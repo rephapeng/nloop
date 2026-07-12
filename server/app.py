@@ -145,6 +145,11 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
 
+    @app.get("/run/{run_id}")
+    def run_page(run_id: str) -> FileResponse:
+        # data di-fetch client-side pakai run_id dari URL
+        return FileResponse(STATIC_DIR / "run.html")
+
     return app
 
 

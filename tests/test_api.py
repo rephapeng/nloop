@@ -43,6 +43,15 @@ def test_health(client):
     assert client.get("/api/health").json() == {"ok": True, "app": "nloop"}
 
 
+def test_dashboard_pages_served(client):
+    r = client.get("/")
+    assert r.status_code == 200 and 'data-page="index"' in r.text
+    r = client.get("/run/apapun-id-nya")
+    assert r.status_code == 200 and 'data-page="run"' in r.text
+    r = client.get("/static/app.js")
+    assert r.status_code == 200 and "EventSource" in r.text
+
+
 def test_create_loop_runs_to_success(client):
     r = client.post("/api/loops", json={"goal": "bikin done.txt", "verify_cmd": VERIFY})
     assert r.status_code == 201

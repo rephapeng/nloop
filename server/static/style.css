@@ -1,0 +1,63 @@
+:root {
+  --bg: #0f1115; --panel: #171a21; --border: #262b36;
+  --text: #d7dce4; --muted: #8a93a3; --accent: #4f8cff;
+  --green: #2ea043; --red: #da3633; --yellow: #b08800; --gray: #57606a;
+}
+* { box-sizing: border-box; }
+body {
+  font-family: system-ui, sans-serif; background: var(--bg); color: var(--text);
+  max-width: 1000px; margin: 0 auto; padding: 1.5rem 1rem;
+}
+a { color: var(--accent); text-decoration: none; }
+code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+h1 { font-size: 1.4rem; } h1 a { color: inherit; }
+h2 { font-size: 1rem; color: var(--muted); margin: 1.5rem 0 0.5rem; }
+
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--border); }
+th { color: var(--muted); font-weight: 500; font-size: 0.85rem; }
+td.goal { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.badge {
+  display: inline-block; padding: 0.1rem 0.55rem; border-radius: 999px;
+  font-size: 0.78rem; color: #fff; background: var(--gray); text-transform: lowercase;
+}
+.badge.running { background: var(--accent); }
+.badge.succeeded { background: var(--green); }
+.badge.failed { background: var(--red); }
+.badge.queued { background: var(--yellow); }
+.badge.stopped { background: var(--gray); }
+
+form.panel, .panel {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 1rem; margin: 1rem 0;
+}
+form .row { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 0.6rem; }
+label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--muted); flex: 1; min-width: 140px; }
+input, button {
+  background: var(--bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 0.45rem 0.6rem; font-size: 0.9rem;
+}
+input:focus { outline: 1px solid var(--accent); }
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { background: transparent; border-color: var(--red); color: var(--red); }
+
+#live {
+  height: 320px; overflow-y: auto; font-family: ui-monospace, monospace;
+  font-size: 0.82rem; white-space: pre-wrap; word-break: break-word;
+}
+.ev { padding: 0.15rem 0.3rem; border-left: 3px solid var(--border); margin-bottom: 2px; }
+.ev.turn { border-color: var(--accent); }
+.ev.tool { border-color: var(--yellow); color: var(--muted); }
+.ev.pass { border-color: var(--green); color: var(--green); }
+.ev.fail { border-color: var(--red); color: var(--red); }
+.ev.status, .ev.result { border-color: var(--muted); color: var(--muted); }
+
+details { border: 1px solid var(--border); border-radius: 6px; margin-bottom: 0.5rem; }
+details summary { padding: 0.5rem 0.7rem; cursor: pointer; }
+details .body { padding: 0.5rem 0.9rem; border-top: 1px solid var(--border); }
+details pre { overflow-x: auto; background: var(--bg); padding: 0.6rem; border-radius: 6px; }
+
+.meta { display: flex; gap: 1.2rem; flex-wrap: wrap; color: var(--muted); font-size: 0.9rem; align-items: center; }
+.meta b { color: var(--text); }

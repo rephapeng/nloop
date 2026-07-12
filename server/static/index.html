@@ -4,13 +4,45 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>nloop</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 4rem auto; padding: 0 1rem; }
-    code { background: #eee; padding: 2px 6px; border-radius: 4px; }
-  </style>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-  <h1>nloop</h1>
-  <p>Loop engine hidup. Dashboard nyusul di Fase 5 — cek <code>/api/health</code>.</p>
+<body data-page="index">
+  <h1>nloop <span style="color:var(--muted);font-weight:400">— loop engineering</span></h1>
+
+  <form id="new-loop" class="panel">
+    <div class="row">
+      <label>Goal
+        <input name="goal" required placeholder="Perbaiki semua test yang gagal">
+      </label>
+      <label>Verify command (exit 0 = selesai)
+        <input name="verify_cmd" required placeholder="pytest -q">
+      </label>
+    </div>
+    <div class="row">
+      <label>Workdir (kosong = auto)
+        <input name="workdir" placeholder="/path/ke/repo">
+      </label>
+      <label>Model
+        <input name="model" placeholder="default config">
+      </label>
+      <label>Max iterations
+        <input name="max_iterations" type="number" min="1" placeholder="10">
+      </label>
+      <label>Max cost (USD)
+        <input name="max_cost_usd" type="number" step="0.5" min="0.5" placeholder="5.0">
+      </label>
+    </div>
+    <button class="primary" type="submit">New loop</button>
+    <span id="form-error" style="color:var(--red);margin-left:0.8rem"></span>
+  </form>
+
+  <table>
+    <thead>
+      <tr><th>Run</th><th>Goal</th><th>Status</th><th>Iterasi</th><th>Cost</th><th></th></tr>
+    </thead>
+    <tbody id="runs"><tr><td colspan="6" style="color:var(--muted)">memuat…</td></tr></tbody>
+  </table>
+
+  <script src="/static/app.js"></script>
 </body>
 </html>
