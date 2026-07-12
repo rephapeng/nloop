@@ -1,6 +1,6 @@
 # nloop config — semua nilai punya default di engine/config.py
 server:
-  host: 127.0.0.1
+  host: 0.0.0.0     # akses via tailscale; dashboard BELUM ada auth — jangan expose ke internet publik
   port: 8484
 
 loops:

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # nloop server + worker (worker jalan di lifespan FastAPI).
+# host/port dari config.yaml (section server), bisa dioverride env HOST/PORT.
 set -e
 cd "$(dirname "$0")"
 [ -d .venv ] && source .venv/bin/activate
-exec uvicorn server.app:app --host "${HOST:-127.0.0.1}" --port "${PORT:-8484}" "$@"
+HOST="${HOST:-$(python -c "from engine.config import load; print(load()['server']['host'])")}"
+PORT="${PORT:-$(python -c "from engine.config import load; print(load()['server']['port'])")}"
+exec uvicorn server.app:app --host "$HOST" --port "$PORT" "$@"
