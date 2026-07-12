@@ -1,0 +1,23 @@
+# nloop config — semua nilai punya default di engine/config.py
+server:
+  host: 127.0.0.1
+  port: 8484
+
+loops:
+  max_concurrent: 2        # semaphore: tiap loop = pohon subprocess claude
+  max_iterations: 10
+  max_cost_usd: 5.0
+  iteration_timeout_sec: 900
+
+claude:
+  model: null              # null = default model CLI (subscription)
+  max_turns: 30
+  allowed_tools: "Bash,Read,Edit,Write,Glob,Grep"
+  permission_mode: acceptEdits
+
+memory:
+  provider: local          # local | selfmem  (Fase 7)
+
+paths:
+  db: nloop.db
+  workspaces: workspaces
