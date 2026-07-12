@@ -102,7 +102,8 @@ def test_fix_on_last_iteration_still_succeeds(monkeypatch, store, cfg, workdir):
 
 def test_budget_exceeded(monkeypatch, store, cfg, workdir):
     calls = make_fake_claude(monkeypatch, cost=1.0)   # nggak pernah benerin
-    run_id = store.create_run("g", "exit 1", workdir,
+    # output verifier variatif biar guardrail no-progress nggak keburu jalan
+    run_id = store.create_run("g", "date +%s%N; exit 1", workdir,
                               max_iterations=10, max_cost_usd=2.5)
     assert run(store, cfg, run_id) == "failed"
     assert len(calls) == 3                            # 1.0+1.0+1.0 > 2.5 → stop
@@ -129,14 +130,16 @@ def test_stop_requested(monkeypatch, store, cfg, workdir):
 
 # ---- recover / anti-ngulang ----
 
-def test_no_progress_hint_on_identical_verifier_output(monkeypatch, store, cfg, workdir):
+def test_no_progress_hint_then_auto_stop(monkeypatch, store, cfg, workdir):
     calls = make_fake_claude(monkeypatch)
     run_id = store.create_run("g", "echo selalu-sama; exit 1", workdir,
-                              max_iterations=3)
-    run(store, cfg, run_id)
+                              max_iterations=10)
+    assert run(store, cfg, run_id) == "failed"
     assert loop.NO_PROGRESS_HINT not in calls[0]      # iterasi 1: belum tahu
-    assert loop.NO_PROGRESS_HINT in calls[1]          # iterasi 2: output identik
-    assert loop.NO_PROGRESS_HINT in calls[2]
+    assert loop.NO_PROGRESS_HINT in calls[1]          # iterasi 2: output identik → hint
+    assert len(calls) == 2                            # iterasi 3: 2x beruntun → STOP, no act
+    last = store.events_since(run_id)[-1]["payload"]
+    assert last["reason"] == "no_progress"
 
 
 def test_journal_injected_into_prompt(monkeypatch, store, cfg, workdir):

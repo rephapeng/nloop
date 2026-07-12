@@ -250,7 +250,13 @@ end run (Fase 7):
 ✅ Loop rusak (goal mustahil) berhenti rapi di guardrail, bukan infinite/boros.
 *(Sengaja SEBELUM memory: lessons jangan diendapkan dari run yang perilakunya masih rusak.)*
 
-**Fase 7 — Memory pluggable (Tier 3).** `memory/base.py` (ABC + factory), `memory/local.py` (FTS5), `memory/selfmem.py`.
+**Fase 7 — Reactive triggers (webhook Sentry/PostHog).** *(dinaikkan — use case utama:
+issue masuk → loop benerin app otomatis)* `POST /api/hooks/{source}`: payload → goal
+(judul error + stacktrace + link issue), workdir/verify_cmd dari mapping per-project di
+config, dedup per issue fingerprint (issue sama nggak spawn loop dobel selama masih aktif).
+✅ Kirim payload Sentry contoh → run baru muncul & jalan; kirim ulang → nggak dobel.
+
+**Fase 8 — Memory pluggable (Tier 3).** `memory/base.py` (ABC + factory), `memory/local.py` (FTS5), `memory/selfmem.py`.
 ✅ Ganti `memory.provider: local` ⇄ `selfmem` di config → loop jalan sama tanpa ubah kode.
 ✅ Loop A nabrak pitfall → tersimpan. Loop B (goal mirip) auto-recall lesson di iterasi pertama & nggak ngulang. `CLAUDE.md` tetap kecil (ter-cap).
 
