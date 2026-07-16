@@ -109,6 +109,58 @@ def test_sse_replay_finished_run(client):
     assert events[-1] == "done"                    # run final → stream ditutup
 
 
+def test_create_with_unknown_role_400(client):
+    r = client.post("/api/loops", json={
+        "goal": "x", "verify_cmd": "exit 0", "role": "role-ngawur"})
+    assert r.status_code == 400
+    assert "role" in r.json()["detail"]
+
+
+def test_schedules_empty_and_unknown_trigger(client):
+    assert client.get("/api/schedules").json() == {}
+    assert client.post("/api/schedules/ghost/trigger").status_code == 404
+
+
+@pytest.fixture
+def client_sched(monkeypatch, tmp_path):
+    """Client dengan satu schedule terdaftar (trigger manual, tanpa nunggu jam)."""
+    async def fake_run(prompt, *, cwd, resume=None, **kwargs):
+        return ClaudeResult(ok=True, subtype="success", result_text="ok",
+                            session_id="s", cost_usd=0.01, num_turns=1)
+
+    monkeypatch.setattr(loop.claude_cli, "run", fake_run)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    cfg = config.load("/nonexistent")
+    cfg["paths"]["db"] = str(tmp_path / "api.db")
+    cfg["paths"]["workspaces"] = str(ws)
+    cfg["loops"]["poll_interval_sec"] = 0.02
+    cfg["schedules"] = {"pipa": {"at": "23:59", "steps": [
+        {"goal": "step-a", "verify_cmd": "exit 0", "workdir": str(ws)},
+        {"goal": "step-b", "verify_cmd": "exit 0", "workdir": str(ws)},
+    ]}}
+    with TestClient(create_app(cfg)) as c:
+        yield c
+
+
+def test_schedule_listed_and_manual_trigger_runs_pipeline(client_sched):
+    scheds = client_sched.get("/api/schedules").json()
+    assert scheds["pipa"]["steps"] == 2 and scheds["pipa"]["at"] == "23:59"
+
+    r = client_sched.post("/api/schedules/pipa/trigger")
+    assert r.status_code == 202 and r.json()["triggered"] is True
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        runs = client_sched.get("/api/loops").json()
+        done = [x for x in runs if x["status"] == "succeeded"]
+        if len(done) == 2:
+            break
+        time.sleep(0.05)
+    assert sorted(x["goal"] for x in done) == ["step-a", "step-b"]
+    assert all(x["fingerprint"] == "schedule:pipa" for x in done)
+
+
 def test_sse_replay_with_after_cursor(client):
     r = client.post("/api/loops", json={"goal": "g", "verify_cmd": VERIFY}).json()
     wait_status(client, r["run_id"], "succeeded")

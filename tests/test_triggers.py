@@ -1,4 +1,6 @@
-"""Fase 7: webhook Sentry/PostHog → loop reaktif, dedup per fingerprint."""
+"""Fase 7: webhook Sentry/PostHog → loop reaktif, dedup per fingerprint.
+Fase 9b: repro-first (issue run wajib tulis script repro) + on_success_cmd."""
+import re
 import time
 from pathlib import Path
 
@@ -7,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from engine import config, loop
 from engine.claude_cli import ClaudeResult
-from engine.triggers import extract_issue
+from engine.triggers import build_goal, compose_verify, extract_issue, repro_path
 from server.app import create_app
 
 SENTRY_PAYLOAD = {
@@ -58,6 +60,34 @@ def test_extract_garbage_payload_still_works():
     assert i["fingerprint"].startswith("sentry:")
 
 
+# ---- repro-first (unit) ----
+
+def test_repro_path_sanitized():
+    p = repro_path("sentry:abc/../123")
+    assert p == ".nloop/repro/sentry-abc----123.sh"     # aman dari path traversal
+
+
+def test_compose_verify_forces_act_when_repro_missing():
+    v = compose_verify("npm run build", ".nloop/repro/x.sh")
+    assert v == "sh .nloop/repro/x.sh && (npm run build)"
+
+
+def test_build_goal_with_repro_contract():
+    issue = extract_issue("sentry", SENTRY_PAYLOAD)
+    rpath = repro_path(issue["fingerprint"])
+    g = build_goal("sentry", issue, repro_path=rpath,
+                   verify_cmd=compose_verify("npm run build", rpath))
+    assert "INVESTIGASI" in g and "REPRO" in g and "FIX" in g
+    assert rpath in g
+    assert "BUKAN placeholder" in g                     # anti repro bohongan
+
+
+def test_build_goal_without_repro_backward_compatible():
+    issue = extract_issue("sentry", SENTRY_PAYLOAD)
+    g = build_goal("sentry", issue)
+    assert "tulis test reproduksi" in g and "REPRO:" not in g
+
+
 # ---- endpoint (integration, worker jalan + claude fake) ----
 
 @pytest.fixture
@@ -71,6 +101,13 @@ def project_dir(tmp_path):
 def client(monkeypatch, tmp_path, project_dir):
     async def fake_run(prompt, *, cwd, resume=None, **kwargs):
         await __import__("asyncio").sleep(0.15)      # biar sempet ke-dedup saat aktif
+        # Agent patuh kontrak repro-first: tulis script repro yang disebut di goal,
+        # lalu "benerin" bug-nya.
+        m = re.search(r"\.nloop/repro/\S+\.sh", prompt)
+        if m:
+            rp = Path(cwd) / m.group(0)
+            rp.parent.mkdir(parents=True, exist_ok=True)
+            rp.write_text("test -f done.txt\n")     # repro: gagal selama bug ada
         (Path(cwd) / "done.txt").write_text("ok")
         return ClaudeResult(ok=True, subtype="success", result_text="fixed",
                             session_id="s", cost_usd=0.01, num_turns=1)
@@ -83,9 +120,11 @@ def client(monkeypatch, tmp_path, project_dir):
     cfg["loops"]["poll_interval_sec"] = 0.02
     cfg["triggers"] = {
         "token": "rahasia",
+        "sentry": {"resolve": False, "url": "https://sentry.io"},
         "projects": {
             "demo": {"workdir": str(project_dir), "verify_cmd": "test -f done.txt",
-                     "max_iterations": 3, "max_cost_usd": 1.0},
+                     "max_iterations": 3, "max_cost_usd": 1.0,
+                     "on_success_cmd": "touch deployed.txt"},
         },
     }
     with TestClient(create_app(cfg)) as c:
@@ -104,7 +143,7 @@ def wait_status(client, run_id, want, timeout=5.0):
     raise AssertionError(f"run {run_id} nggak pernah {want}")
 
 
-def test_webhook_spawns_loop_that_fixes(client):
+def test_webhook_spawns_loop_that_fixes(client, project_dir):
     r = client.post(HOOK, json=SENTRY_PAYLOAD)
     assert r.status_code == 201
     body = r.json()
@@ -112,7 +151,15 @@ def test_webhook_spawns_loop_that_fixes(client):
     run = client.get(f"/api/loops/{body['run_id']}").json()
     assert "TypeError" in run["goal"]                # judul issue masuk goal
     assert "sentry.io" in run["goal"]                # link ikut
+    assert "REPRO" in run["goal"]                    # kontrak repro-first masuk goal
+    assert run["verify_cmd"].startswith("sh .nloop/repro/")   # repro gate verifier
     wait_status(client, body["run_id"], "succeeded") # loop beneran jalan sampai beres
+
+    # repro script beneran ketulis & langkah rilis (on_success_cmd) jalan
+    assert list(project_dir.glob(".nloop/repro/*.sh"))
+    assert (project_dir / "deployed.txt").exists()
+    detail = client.get(f"/api/loops/{body['run_id']}").json()
+    assert detail["iterations_done"] >= 1            # dipaksa ACT (nggak 0-iterasi)
 
 
 def test_webhook_dedup_while_active_then_allows_after_done(client):

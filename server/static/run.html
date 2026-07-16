@@ -1,30 +1,52 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>nloop — run</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔁</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-page="run">
-  <h1><a href="/">nloop</a> / <code id="run-id"></code></h1>
 
-  <div class="panel">
-    <p id="goal" style="margin:0 0 0.7rem;font-size:1.05rem"></p>
-    <div class="meta">
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">
+        <span class="logo">∞</span> nloop
+      </a>
+      <span class="crumb">/ <code id="run-id"></code></span>
+      <span class="spacer"></span>
       <span id="status-badge"></span>
-      <span>iterasi <b id="iter">-</b></span>
-      <span>cost <b id="cost">-</b></span>
-      <span>verify <code id="verify-cmd"></code></span>
-      <button id="stop" class="danger">Stop</button>
     </div>
-  </div>
+  </header>
 
-  <h2>Live</h2>
-  <div id="live" class="panel"></div>
+  <main class="wrap">
 
-  <h2>Timeline iterasi</h2>
-  <div id="iterations"><span style="color:var(--muted)">belum ada iterasi</span></div>
+    <section class="card run-head">
+      <div class="top">
+        <p class="goal-big" id="goal">…</p>
+        <button id="stop" class="danger" style="display:none">Stop</button>
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="gauges">
+        <div class="gauge">
+          <div class="lbl"><span>Iterations</span><b id="iter">–</b></div>
+          <div class="bar" id="iter-bar"><i style="width:0%"></i></div>
+        </div>
+        <div class="gauge">
+          <div class="lbl"><span>Budget</span><b id="cost">–</b></div>
+          <div class="bar" id="cost-bar"><i style="width:0%"></i></div>
+        </div>
+      </div>
+    </section>
+
+    <h2 class="sect">Live</h2>
+    <div id="live" class="card"></div>
+
+    <h2 class="sect">Iteration timeline</h2>
+    <div id="iterations"><div class="empty">no iterations yet</div></div>
+
+  </main>
 
   <script src="/static/app.js"></script>
 </body>

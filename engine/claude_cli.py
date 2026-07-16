@@ -1,8 +1,12 @@
 """Adapter subprocess → `claude -p` (subscription-safe, stream-json).
 
-Kunci kompatibilitas subscription (pola refan-agentic):
-- env.pop("CLAUDECODE")        → nggak kedeteksi nested session
-- env.pop("ANTHROPIC_API_KEY") → paksa auth login subscription, bukan API billing
+Kunci kompatibilitas subscription (pola refan-agentic + dtc-agent):
+- env.pop("CLAUDECODE")             → nggak kedeteksi nested session
+- env.pop("ANTHROPIC_API_KEY")      → paksa auth login subscription, bukan API billing
+- env.pop("ANTHROPIC_AUTH_TOKEN")   → idem (jalur token alternatif)
+- env.pop("ANTHROPIC_BASE_URL")     → jangan ke-redirect ke gateway API custom
+- lock_file (opsional)              → flock single-flight LINTAS proses/project
+  (pola .claude.lock dtc-agent: satu subscription, jangan hammering paralel)
 
 Output `--output-format stream-json --verbose` dibaca baris-per-baris (incremental,
 jangan buffer gede) dan dipetakan ke callback event: init | turn | tool | result.
@@ -16,6 +20,24 @@ from dataclasses import dataclass
 
 DEFAULT_ALLOWED_TOOLS = "Bash,Read,Edit,Write,Glob,Grep"
 STREAM_LIMIT = 10 * 1024 * 1024  # baris stream-json bisa gede (tool_result)
+ENV_STRIP = ("CLAUDECODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
+             "ANTHROPIC_BASE_URL")
+
+
+def last_json(text: str) -> dict | None:
+    """Ambil objek JSON TERAKHIR dari output model (kontrak "JSON last line" dtc:
+    role diminta menutup jawaban dengan satu baris JSON, mis. {"pass": true, ...})."""
+    for line in reversed((text or "").splitlines()):
+        line = line.strip()
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
 
 
 @dataclass
@@ -34,29 +56,50 @@ async def run(
     *,
     cwd: str,
     resume: str | None = None,
+    session_id: str | None = None,
     model: str | None = None,
-    max_turns: int = 30,
+    max_turns: int | None = 30,
     allowed_tools: str = DEFAULT_ALLOWED_TOOLS,
     permission_mode: str = "acceptEdits",
     timeout_sec: int = 900,
+    system_prompt: str | None = None,
+    max_thinking_tokens: int | None = None,
+    lock_file: str | None = None,
     on_event=None,
 ) -> ClaudeResult:
-    """Jalankan satu iterasi `claude -p`. `on_event(type, payload)` boleh sync/async."""
+    """Jalankan satu iterasi `claude -p`. `on_event(type, payload)` boleh sync/async.
+
+    - system_prompt → --append-system-prompt (role/grounding, pola dtc run_claude.sh)
+    - session_id    → --session-id (mulai sesi BARU dengan id stabil yang kita pegang;
+                      dipakai chat Telegram; kalau `resume` diisi, resume yang menang)
+    - lock_file     → dibungkus `flock -w timeout` — single-flight lintas proses
+    """
     cmd = [
         "claude", "-p", prompt,
         "--output-format", "stream-json", "--verbose",
         "--permission-mode", permission_mode,
         "--allowedTools", allowed_tools,
-        "--max-turns", str(max_turns),
     ]
+    if max_turns is not None:    # None = tanpa batas turn (chat Telegram)
+        cmd += ["--max-turns", str(max_turns)]
     if resume:
         cmd += ["--resume", resume]
+    elif session_id:
+        cmd += ["--session-id", session_id]
     if model:
         cmd += ["--model", model]
+    if system_prompt:
+        cmd += ["--append-system-prompt", system_prompt]
+    if lock_file:
+        # flock nunggu maksimal se-timeout iterasi; kalau nggak kebagian, exit != 0
+        # tanpa event `result` → kebaca sebagai error transient (kena retry loop).
+        cmd = ["flock", "-w", str(timeout_sec), lock_file] + cmd
 
     env = os.environ.copy()
-    env.pop("CLAUDECODE", None)          # jgn kedeteksi nested session
-    env.pop("ANTHROPIC_API_KEY", None)   # PAKSA pakai login subscription, bukan API billing
+    for k in ENV_STRIP:
+        env.pop(k, None)
+    if max_thinking_tokens:
+        env["MAX_THINKING_TOKENS"] = str(max_thinking_tokens)
 
     res = ClaudeResult()
 

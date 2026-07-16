@@ -260,6 +260,43 @@ config, dedup per issue fingerprint (issue sama nggak spawn loop dobel selama ma
 ✅ Ganti `memory.provider: local` ⇄ `selfmem` di config → loop jalan sama tanpa ubah kode.
 ✅ Loop A nabrak pitfall → tersimpan. Loop B (goal mirip) auto-recall lesson di iterasi pertama & nggak ngulang. `CLAUDE.md` tetap kecil (ter-cap).
 
+**Fase 9 — Port kapabilitas dtc-agent (SELESAI 2026-07-15).** Generalisasi engine
+dtc-agent (github.com/rephapeng/dtc-agent) ke nloop; payload devtocash-specific
+(SEO/cross-post) SENGAJA nggak diport — itu urusan project, loop bisa manggil via Bash.
+- Roles + grounding: `engine/grounding.py` — `roles/common.md` + output `context_cmd`
+  (segar tiap iterasi) + `roles/<role>.md` → `--append-system-prompt`.
+- Subscription hygiene: `claude.lock_file` (flock single-flight lintas proses, pola
+  `.claude.lock`), strip `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_BASE_URL` juga.
+- LLM quality gate: `gate_prompt` per run — verifier lolos → reviewer terpisah
+  (read-only, session sendiri, kontrak JSON last-line `{"pass":...}`); reject →
+  loop lanjut dengan alasan sebagai feedback; biaya gate masuk budget.
+- Scheduler: `engine/scheduler.py` — `schedules:` (at HH:MM UTC / every 6h),
+  steps sekuensial + `always: true` (pola daily_pipeline), dedup fingerprint
+  `schedule:<nama>`, endpoint `GET /api/schedules` + `POST /api/schedules/{n}/trigger`.
+- Telegram: `engine/telegram.py` (task di lifespan) — notif run selesai, /loops /new
+  /stop /status /reset, chat freeform → session Claude Code per-chat (`--resume` +
+  retry fresh), tiering model (smalltalk → murah), redaksi secret, foto/dokumen →
+  `incoming/`, allow-list fails closed. Secrets di `.env` (TELEGRAM_BOT_TOKEN,
+  TELEGRAM_ALLOWED_CHAT_IDS).
+- CLI `bin/nloop` (new/ls/show/stop/schedules/trigger/ask) + `deploy/self_restart.sh`
+  (restart via systemd-run di luar cgroup biar balasan Telegram selamat).
+
+**Fase 9b — Issue-fix pipeline penuh (SELESAI 2026-07-15).** Webhook run bukan cuma
+"verify build" — siklus lengkap: repro → fix → validasi → rilis → tutup issue.
+- Repro-first (`repro: true`, default di webhook): verify_cmd issue run =
+  `sh .nloop/repro/<issue>.sh && (verify project)`. Script belum ada → verifier
+  gagal → loop DIPAKSA investigasi + nulis repro dari stacktrace + fix beneran.
+  (Tanpa ini, error runtime nggak bikin build merah → loop no-op.)
+- `on_success_cmd` per project: fix terverifikasi 100% → langkah rilis (git push,
+  docker compose up --build, dst.). Gagal → run FAILED reason `postrun_failed`.
+- `triggers.sentry.resolve: true` + SENTRY_AUTH_TOKEN di .env → run sukses →
+  issue di-mark resolved via API Sentry (gagal resolve = warning, bukan fail).
+- Watchdog Sentry (`engine/watchdog.py`, section `watchdog:`): poll API
+  `projects/{org}/{slug}/issues/?query=is:unresolved` tiap interval → spawn
+  issue-fix run lewat jalur yang sama dengan webhook (`triggers.create_issue_run`).
+  Guardrail: dedup fingerprint aktif, cooldown per-issue (default 24h), cap
+  `max_per_tick`. Endpoint: `GET /api/watchdog`, `POST /api/watchdog/tick`.
+
 ---
 
 ## Guardrails (wajib)

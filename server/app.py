@@ -18,9 +18,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from engine import config, triggers
+from engine import config, grounding, triggers
 from engine.events import EventBus
+from engine.scheduler import Scheduler
 from engine.store import Store
+from engine.telegram import TelegramBot
+from engine.watchdog import Watchdog
 from engine.worker import Worker
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -35,6 +38,9 @@ class LoopCreate(BaseModel):
     model: str | None = None
     max_iterations: int | None = Field(default=None, ge=1)
     max_cost_usd: float | None = Field(default=None, gt=0)
+    role: str | None = None         # roles/<role>.md → system prompt
+    context_cmd: str | None = None  # grounding segar tiap iterasi (stdout di-inject)
+    gate_prompt: str | None = None  # kriteria LLM quality gate setelah verifier lolos
 
 
 def create_app(cfg: dict | None = None) -> FastAPI:
@@ -42,14 +48,44 @@ def create_app(cfg: dict | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        config.load_env()                    # secrets (.env) — token Telegram dst.
         store = Store(cfg["paths"]["db"])
         bus = EventBus()
-        worker = Worker(store, cfg, on_event=bus.publish)
+
+        bot: TelegramBot | None = None
+        if cfg["telegram"].get("enabled") and os.environ.get("TELEGRAM_BOT_TOKEN"):
+            bot = TelegramBot(cfg, store)
+
+        def on_event(run_id: str, ev: dict) -> None:
+            bus.publish(run_id, ev)
+            # notif Telegram saat run mencapai status final
+            if (bot and cfg["telegram"].get("notify", True)
+                    and ev["type"] == "status"
+                    and ev["payload"].get("status") in TERMINAL):
+                run = store.get_run(run_id)
+                if run:
+                    asyncio.create_task(bot.notify_run_finished(run, ev["payload"]))
+
+        worker = Worker(store, cfg, on_event=on_event)
+        scheduler = Scheduler(store, cfg)
+        watchdog = Watchdog(store, cfg)
         worker_task = asyncio.create_task(worker.run_forever())
+        sched_task = asyncio.create_task(scheduler.run_forever())
+        wd_task = asyncio.create_task(watchdog.run_forever())
+        bot_task = asyncio.create_task(bot.run_forever()) if bot else None
         app.state.store, app.state.bus, app.state.worker = store, bus, worker
+        app.state.scheduler, app.state.bot = scheduler, bot
+        app.state.watchdog = watchdog
         yield
+        if bot_task:                         # bot dulu (long-poll), baru worker
+            bot_task.cancel()
+            await asyncio.gather(bot_task, return_exceptions=True)
+        if bot:
+            await bot.stop()
+        await watchdog.stop()
+        await scheduler.stop()
         await worker.stop()
-        await worker_task
+        await asyncio.gather(worker_task, sched_task, wd_task)
 
     app = FastAPI(title="nloop", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -70,6 +106,12 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         elif not os.path.isdir(workdir):
             raise HTTPException(400, f"workdir tidak ada: {workdir}")
 
+        if body.role:  # fail cepat di sini, bukan pas run udah jalan
+            try:
+                grounding.role_prompt(cfg, body.role)
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+
         run_id = store.create_run(
             body.goal,
             body.verify_cmd,
@@ -77,6 +119,9 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             model=body.model or cfg["claude"].get("model"),
             max_iterations=body.max_iterations or loops_cfg["max_iterations"],
             max_cost_usd=body.max_cost_usd or loops_cfg["max_cost_usd"],
+            role=body.role,
+            context_cmd=body.context_cmd,
+            gate_prompt=body.gate_prompt,
         )
         return {"run_id": run_id, "status": "queued", "workdir": workdir}
 
@@ -128,17 +173,49 @@ def create_app(cfg: dict | None = None) -> FastAPI:
                 "fingerprint": issue["fingerprint"],
             })
 
-        run_id = store.create_run(
-            triggers.build_goal(source, issue),
-            proj["verify_cmd"],
-            proj["workdir"],
-            model=proj.get("model") or cfg["claude"].get("model"),
-            max_iterations=proj.get("max_iterations") or cfg["loops"]["max_iterations"],
-            max_cost_usd=proj.get("max_cost_usd") or cfg["loops"]["max_cost_usd"],
-            fingerprint=issue["fingerprint"],
-        )
+        # Repro-first + spawn: jalur bersama dengan watchdog (triggers.create_issue_run)
+        run_id = triggers.create_issue_run(store, cfg, proj, source, issue)
         return {"run_id": run_id, "deduped": False,
                 "fingerprint": issue["fingerprint"], "title": issue["title"]}
+
+    @app.get("/api/schedules")
+    def list_schedules(request: Request) -> dict:
+        store: Store = request.app.state.store
+        out = {}
+        for name, spec in (cfg.get("schedules") or {}).items():
+            out[name] = {
+                "at": spec.get("at"), "every": spec.get("every"),
+                "steps": len(Scheduler._steps(spec)),
+                "active_run": store.find_active_by_fingerprint(f"schedule:{name}"),
+            }
+        return out
+
+    @app.post("/api/schedules/{name}/trigger", status_code=202)
+    async def trigger_schedule(name: str, request: Request) -> dict:
+        """Jalankan pipeline schedule SEKARANG (setara `systemctl start` timer dtc)."""
+        spec = (cfg.get("schedules") or {}).get(name)
+        if spec is None:
+            raise HTTPException(404, f"schedule '{name}' tidak ada")
+        store: Store = request.app.state.store
+        active = store.find_active_by_fingerprint(f"schedule:{name}")
+        if active:
+            return {"triggered": False, "reason": "masih aktif", "run_id": active}
+        scheduler: Scheduler = request.app.state.scheduler
+        asyncio.create_task(scheduler.trigger(name, spec))
+        return {"triggered": True, "schedule": name}
+
+    @app.get("/api/watchdog")
+    def watchdog_status(request: Request) -> dict:
+        return request.app.state.watchdog.status()
+
+    @app.post("/api/watchdog/tick", status_code=202)
+    async def watchdog_tick(request: Request) -> dict:
+        """Paksa satu putaran poll SEKARANG (tanpa nunggu interval)."""
+        w = cfg.get("watchdog", {})
+        if not w.get("enabled") or not w.get("organization"):
+            raise HTTPException(400, "watchdog belum dikonfigurasi (enabled + organization)")
+        spawned = await request.app.state.watchdog.tick()
+        return {"spawned": spawned}
 
     @app.get("/api/loops/{run_id}/events")
     async def stream_events(run_id: str, request: Request, after: int = 0):

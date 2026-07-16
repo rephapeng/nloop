@@ -14,27 +14,134 @@ loops:
 
 claude:
   model: null              # null = default model CLI (subscription)
-  max_turns: 30
+  max_turns: 50
   allowed_tools: "Bash,Read,Edit,Write,Glob,Grep"
   permission_mode: acceptEdits
   retries: 1                  # retry dalam-iterasi buat error transient
   max_consecutive_errors: 2   # iterasi error beruntun -> fail run
+  lock_file: null             # single-flight LINTAS proses (flock). Share subscription
+                              # dengan agent lain di box? samain file-nya, mis.
+                              # /opt/dtc-agent/.claude.lock
+  gate_max_turns: 15          # LLM quality gate (reviewer read-only)
+  gate_allowed_tools: "Read,Grep,Glob"
 
 # Reactive triggers: webhook Sentry/PostHog -> loop otomatis.
 # URL: POST /api/hooks/{sentry|posthog|generic}?project=<nama>&token=<token>
 triggers:
   token: null              # WAJIB diisi string random kalau server-nya exposed
-  projects: {}
-  # projects:
-  #   marginin:
-  #     workdir: /opt/marginin
-  #     verify_cmd: "npm test"        # sesuaikan: command yang exit 0 kalau sehat
-  #     max_iterations: 8
-  #     max_cost_usd: 5.0
+  sentry:
+    resolve: true          # run sukses -> mark issue resolved (SENTRY_AUTH_TOKEN di .env)
+    url: https://sentry.io
+  projects:
+    marginin:              # issue Sentry masuk -> repro -> fix -> push+deploy -> resolve
+      workdir: /opt/marginin
+      verify_cmd: "npm run build"     # health check project (repro script otomatis di depannya)
+      repro: true                     # agent WAJIB tulis .nloop/repro/<issue>.sh dulu
+      on_success_cmd: >-
+        git add -A && git commit -m "fix: auto-fix Sentry issue (nloop)" &&
+        git push origin main && docker compose up -d --build
+      max_iterations: 8
+      max_cost_usd: 5.0
+    onecookie:             # toko kue — FastAPI + vanilla JS (lihat /opt/onecookie/CLAUDE.md)
+      workdir: /opt/onecookie
+      verify_cmd: "python3 -m py_compile app/main.py app/db.py && node --check public/js/store.js && node --check public/admin/admin.js"
+      repro: true
+      on_success_cmd: >-
+        git add -A && git commit -m "fix: auto-fix Sentry issue (nloop)" &&
+        git push origin main && docker compose up -d --build
+      max_iterations: 8
+      max_cost_usd: 5.0
+
+# Watchdog Sentry: poll issue unresolved tiap interval -> spawn loop issue-fix.
+# Pelengkap webhook — issue tetap ketangkep walau alert rule lupa dipasang.
+# Isi organization (slug org Sentry) + SENTRY_AUTH_TOKEN di .env, lalu enable.
+watchdog:
+  enabled: true
+  interval: 1h             # default kalau project di bawah nggak override
+  cooldown: 24h            # issue yang barusan dicoba (sukses/gagal) jangan diulang dulu
+  max_per_tick: 1
+  organization: marginin
+  projects:                # tiap project poll SENDIRI-SENDIRI, interval bisa beda
+    marginin:
+      name: marginin        # <nama di triggers.projects>
+      interval: 30m         # TODO: sesuaikan — placeholder, ganti sesuai kebutuhan
+    onecookie:
+      name: onecookie
+      interval: 2h          # TODO: sesuaikan — placeholder, ganti sesuai kebutuhan
 
 memory:
   provider: local          # local | selfmem  (Fase 8)
 
+# Loop terjadwal (port systemd-timer + pipeline dtc-agent). `at` = harian UTC,
+# atau `every` = interval (30m/6h/1d). Steps jalan BERURUTAN; step berikut cuma
+# jalan kalau sebelumnya succeeded, kecuali `always: true`.
+#
+# promo-pagi/sore: gimmick post MarginIn -> Buffer (twitter + threads), terbit di
+# primetime WIB (pagi 07:30, sore 19:00 — jam post diatur scripts/buffer_post.py).
+# Run nyala ~45 menit sebelum jam post biar agent sempet nulis. Token Buffer di
+# .env (BUFFER_ACCESS_TOKEN).
+schedules:
+  promo-pagi:
+    at: "23:45"            # UTC = 06:45 WIB -> post terbit 07:30 WIB
+    steps:
+      - goal: >-
+          Bikin gimmick post promosi MarginIn buat slot PAGI: 1 post twitter +
+          1 post threads, jadwalin ke Buffer pake
+          /opt/nloop/.venv/bin/python3 /opt/nloop/scripts/buffer_post.py post
+          --slot pagi. Ikuti aturan konten di role.
+        workdir: /opt/nloop
+        verify_cmd: ".venv/bin/python3 scripts/buffer_post.py verify --slot pagi"
+        role: buffer-promo
+        context_cmd: ".venv/bin/python3 scripts/buffer_post.py recent -n 10"
+        max_iterations: 4
+        max_cost_usd: 1.5
+  promo-sore:
+    at: "11:15"            # UTC = 18:15 WIB -> post terbit 19:00 WIB
+    steps:
+      - goal: >-
+          Bikin gimmick post promosi MarginIn buat slot SORE: 1 post twitter +
+          1 post threads, jadwalin ke Buffer pake
+          /opt/nloop/.venv/bin/python3 /opt/nloop/scripts/buffer_post.py post
+          --slot sore. Ikuti aturan konten di role.
+        workdir: /opt/nloop
+        verify_cmd: ".venv/bin/python3 scripts/buffer_post.py verify --slot sore"
+        role: buffer-promo
+        context_cmd: ".venv/bin/python3 scripts/buffer_post.py recent -n 10"
+        max_iterations: 4
+        max_cost_usd: 1.5
+# schedules:
+#   daily-content:
+#     at: "01:04"
+#     steps:
+#       - goal: "Tulis satu artikel baru sesuai role writer, lalu pastikan build lolos"
+#         workdir: /opt/devtocash
+#         verify_cmd: "npm run build"
+#         role: writer                       # roles/writer.md
+#         context_cmd: "python3 lib/build_knowledge.py --stdout"   # grounding segar
+#         gate_prompt: |
+#           Artikel baru >= 1000 kata, orisinal, niche DevOps/SRE, frontmatter valid,
+#           semua internal link nunjuk slug yang beneran ada.
+#       - goal: "Bikin report harian dan kirim ke boss"
+#         workdir: /opt/devtocash
+#         verify_cmd: "exit 0"
+#         always: true                       # tetap jalan walau step 1 gagal
+
+# Bot Telegram: notif run selesai + kontrol (/loops /new /stop) + chat agent.
+# Secrets di .env (chmod 600, gitignored): TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_CHAT_IDS
+telegram:
+  enabled: true
+  notify: true             # broadcast run selesai ke semua chat allow-list
+  agent_workdir: .         # cwd buat chat freeform -> session Claude Code
+  model: null              # model chat substantif (null = default CLI)
+  model_smalltalk: sonnet  # sapaan pendek -> tier murah (hemat subscription)
+  thinking_tokens: 10000
+  cmd_timeout_sec: 900
+  max_turns: null          # null = tanpa batas turn buat chat (guardrail: timeout + auto-continue)
+  progress_interval_sec: 60  # kirim update progres ke chat tiap N detik (0 = off)
+  # role: agent            # roles/agent.md dipake sebagai persona chat
+  # context_cmd: "..."     # grounding segar buat tiap pesan chat
+
 paths:
   db: nloop.db
   workspaces: workspaces
+  roles: roles             # roles/<nama>.md + roles/common.md (system prompt)

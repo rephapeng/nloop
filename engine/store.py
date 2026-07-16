@@ -70,6 +70,11 @@ class Store:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(runs)")}
         if "fingerprint" not in cols:  # Fase 7: dedup trigger webhook
             self.db.execute("ALTER TABLE runs ADD COLUMN fingerprint TEXT")
+        # Fase 9 (port dtc-agent): role prompt, grounding cmd, LLM gate.
+        # on_success_cmd: langkah rilis setelah fix terverifikasi (push+deploy).
+        for col in ("role", "context_cmd", "gate_prompt", "on_success_cmd"):
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
 
     # ---- runs ----
 
@@ -83,14 +88,20 @@ class Store:
         max_iterations: int = 10,
         max_cost_usd: float = 5.0,
         fingerprint: str | None = None,
+        role: str | None = None,
+        context_cmd: str | None = None,
+        gate_prompt: str | None = None,
+        on_success_cmd: str | None = None,
     ) -> str:
         run_id = uuid.uuid4().hex[:12]
         self.db.execute(
             "INSERT INTO runs(id, goal, verify_cmd, workdir, model,"
-            " max_iterations, max_cost_usd, fingerprint, created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?)",
+            " max_iterations, max_cost_usd, fingerprint, role, context_cmd,"
+            " gate_prompt, on_success_cmd, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, goal, verify_cmd, workdir, model,
-             max_iterations, max_cost_usd, fingerprint, time.time()),
+             max_iterations, max_cost_usd, fingerprint, role, context_cmd,
+             gate_prompt, on_success_cmd, time.time()),
         )
         self.db.commit()
         return run_id
@@ -103,6 +114,14 @@ class Store:
             (fingerprint,),
         ).fetchone()
         return row["id"] if row else None
+
+    def last_run_for_fingerprint(self, fingerprint: str) -> dict | None:
+        """Run terakhir (status apa pun) buat fingerprint — dipakai cooldown watchdog."""
+        row = self.db.execute(
+            "SELECT * FROM runs WHERE fingerprint=? ORDER BY created_at DESC LIMIT 1",
+            (fingerprint,),
+        ).fetchone()
+        return dict(row) if row else None
 
     def get_run(self, run_id: str) -> dict | None:
         row = self.db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
@@ -133,6 +152,12 @@ class Store:
             "UPDATE runs SET cost_total=?, iterations_done=?, session_id=? WHERE id=?",
             (cost_total, iterations_done, session_id, run_id),
         )
+        self.db.commit()
+
+    def update_cost(self, run_id: str, cost_total: float) -> None:
+        """Update cost di luar siklus iterasi (mis. biaya LLM gate)."""
+        self.db.execute("UPDATE runs SET cost_total=? WHERE id=?",
+                        (cost_total, run_id))
         self.db.commit()
 
     def claim_queued(self) -> str | None:

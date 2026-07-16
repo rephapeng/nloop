@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""nloop CLI — kontrol engine dari terminal (pola bin/dtc).
+
+  nloop new "<goal>" "<verify_cmd>" [workdir]   antri loop baru
+  nloop ls                                      daftar run + status + cost
+  nloop show <run_id>                           detail run + iterasi
+  nloop stop <run_id>                           minta stop
+  nloop schedules                               daftar schedule + status
+  nloop trigger <schedule>                      jalankan pipeline schedule sekarang
+  nloop ask "<pertanyaan>" [--role X]           Q&A one-shot (read-only, tanpa server)
+
+Server dibaca dari config.yaml (section server). Override: NLOOP_URL.
+"""
+from __future__ import annotations
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+
+def base_url() -> str:
+    if os.environ.get("NLOOP_URL"):
+        return os.environ["NLOOP_URL"].rstrip("/")
+    from engine import config
+    cfg = config.load(os.path.join(ROOT, "config.yaml"))
+    host = cfg["server"]["host"]
+    if host in ("0.0.0.0", "::"):
+        host = "127.0.0.1"
+    return f"http://{host}:{cfg['server']['port']}"
+
+
+def api(method: str, path: str, body: dict | None = None):
+    req = urllib.request.Request(
+        base_url() + path, method=method,
+        data=json.dumps(body).encode() if body is not None else None,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        print(f"HTTP {e.code}: {e.read().decode()[:500]}", file=sys.stderr)
+        sys.exit(1)
+    except urllib.error.URLError as e:
+        print(f"server nggak kejangkau ({e.reason}) — nloop jalan? cek ./run.sh",
+              file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_new(args: list[str]) -> None:
+    if len(args) < 2:
+        die('usage: nloop new "<goal>" "<verify_cmd>" [workdir]')
+    body = {"goal": args[0], "verify_cmd": args[1]}
+    if len(args) > 2:
+        body["workdir"] = args[2]
+    out = api("POST", "/api/loops", body)
+    print(f"run {out['run_id']} queued  workdir={out['workdir']}")
+
+
+def cmd_ls(_args: list[str]) -> None:
+    for r in api("GET", "/api/loops"):
+        goal = r["goal"].splitlines()[0][:60]
+        print(f"{r['id']}  {r['status']:<9}  it {r['iterations_done']}/{r['max_iterations']}"
+              f"  ${r['cost_total']:.2f}  {goal}")
+
+
+def cmd_show(args: list[str]) -> None:
+    if not args:
+        die("usage: nloop show <run_id>")
+    print(json.dumps(api("GET", f"/api/loops/{args[0]}"), indent=2, ensure_ascii=False))
+
+
+def cmd_stop(args: list[str]) -> None:
+    if not args:
+        die("usage: nloop stop <run_id>")
+    api("POST", f"/api/loops/{args[0]}/stop")
+    print(f"stop diminta buat {args[0]}")
+
+
+def cmd_schedules(_args: list[str]) -> None:
+    scheds = api("GET", "/api/schedules")
+    if not scheds:
+        print("(nggak ada schedule di config.yaml)")
+        return
+    for name, s in scheds.items():
+        when = s["at"] and f'at {s["at"]} UTC' or f'every {s["every"]}'
+        active = f"  AKTIF: {s['active_run']}" if s.get("active_run") else ""
+        print(f"{name}  {when}  {s['steps']} step{active}")
+
+
+def cmd_trigger(args: list[str]) -> None:
+    if not args:
+        die("usage: nloop trigger <schedule>")
+    print(json.dumps(api("POST", f"/api/schedules/{args[0]}/trigger"), ensure_ascii=False))
+
+
+def cmd_ask(args: list[str]) -> None:
+    """Q&A one-shot read-only — langsung spawn claude, nggak lewat server/queue
+    (pola `dtc ask`): grounding role + context_cmd tetap kepakai."""
+    role = None
+    if "--role" in args:
+        i = args.index("--role")
+        role = args[i + 1] if i + 1 < len(args) else None
+        args = args[:i] + args[i + 2:]
+    if not args:
+        die('usage: nloop ask "<pertanyaan>" [--role X]')
+
+    import asyncio
+    from engine import claude_cli, config, grounding
+    cfg = config.load(os.path.join(ROOT, "config.yaml"))
+
+    async def main() -> None:
+        system_prompt = await grounding.build_system_prompt(cfg, role=role, workdir=".")
+        res = await claude_cli.run(
+            args[0], cwd=".",
+            model=cfg["claude"].get("model"),
+            max_turns=15,
+            allowed_tools="Read,Grep,Glob,Bash",
+            permission_mode="default",
+            timeout_sec=600,
+            system_prompt=system_prompt,
+            lock_file=cfg["claude"].get("lock_file"),
+        )
+        if not res.ok:
+            die(f"claude gagal: {res.subtype} {res.stderr_tail[-300:]}")
+        print(res.result_text)
+        print(f"\n[cost ${res.cost_usd:.4f}, {res.num_turns} turns]", file=sys.stderr)
+
+    asyncio.run(main())
+
+
+def die(msg: str) -> None:
+    print(msg, file=sys.stderr)
+    sys.exit(2)
+
+
+COMMANDS = {"new": cmd_new, "ls": cmd_ls, "show": cmd_show, "stop": cmd_stop,
+            "schedules": cmd_schedules, "trigger": cmd_trigger, "ask": cmd_ask}
+
+
+def main() -> None:
+    if len(sys.argv) < 2 or sys.argv[1] in ("help", "--help", "-h"):
+        print(__doc__.strip())
+        return
+    fn = COMMANDS.get(sys.argv[1])
+    if fn is None:
+        die(f"unknown command: {sys.argv[1]} (coba: nloop help)")
+    fn(sys.argv[2:])
+
+
+if __name__ == "__main__":
+    main()

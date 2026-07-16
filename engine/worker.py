@@ -62,9 +62,11 @@ class Worker:
         except Exception as exc:  # loop meledak ≠ worker mati
             log.exception("run %s error", run_id)
             self.store.finish(run_id, "failed")
-            self.store.add_event(
-                run_id, "status", {"status": "failed", "reason": f"worker_error: {exc}"}
-            )
+            payload = {"status": "failed", "reason": f"worker_error: {exc}"}
+            event_id = self.store.add_event(run_id, "status", payload)
+            if self.on_event:  # SSE + notif Telegram juga harus tahu run mati
+                self.on_event(run_id, {"id": event_id, "type": "status",
+                                       "payload": payload})
         finally:
             self.sem.release()
 

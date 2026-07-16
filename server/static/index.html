@@ -1,47 +1,85 @@
 <!doctype html>
-<html lang="id">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>nloop</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔁</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body data-page="index">
-  <h1>nloop <span style="color:var(--muted);font-weight:400">— loop engineering</span></h1>
 
-  <form id="new-loop" class="panel">
-    <div class="row">
-      <label>Goal
-        <input name="goal" required placeholder="Perbaiki semua test yang gagal">
-      </label>
-      <label>Verify command (exit 0 = selesai)
-        <input name="verify_cmd" required placeholder="pytest -q">
-      </label>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">
+        <span class="logo">∞</span> nloop <span class="sub">loop engineering</span>
+      </a>
+      <span class="spacer"></span>
+      <div class="stats" id="stats"></div>
     </div>
-    <div class="row">
-      <label>Workdir (kosong = auto)
-        <input name="workdir" placeholder="/path/ke/repo">
-      </label>
-      <label>Model
-        <input name="model" placeholder="default config">
-      </label>
-      <label>Max iterations
-        <input name="max_iterations" type="number" min="1" placeholder="10">
-      </label>
-      <label>Max cost (USD)
-        <input name="max_cost_usd" type="number" step="0.5" min="0.5" placeholder="5.0">
-      </label>
-    </div>
-    <button class="primary" type="submit">New loop</button>
-    <span id="form-error" style="color:var(--red);margin-left:0.8rem"></span>
-  </form>
+  </header>
 
-  <table>
-    <thead>
-      <tr><th>Run</th><th>Goal</th><th>Status</th><th>Iterasi</th><th>Cost</th><th></th></tr>
-    </thead>
-    <tbody id="runs"><tr><td colspan="6" style="color:var(--muted)">memuat…</td></tr></tbody>
-  </table>
+  <main class="wrap">
+
+    <div class="toolbar">
+      <h2 class="sect" style="margin:0;flex:1">Loops</h2>
+      <button class="primary" id="toggle-form" type="button">＋ New loop</button>
+    </div>
+
+    <form id="new-loop" class="card" hidden>
+      <div class="grid">
+        <label class="field full">Goal
+          <input name="goal" required placeholder="Fix all failing tests in this repo">
+        </label>
+        <label class="field">Verify command <span class="hint">— exit 0 = done</span>
+          <input name="verify_cmd" required placeholder="pytest -q" class="mono">
+        </label>
+        <label class="field">Workdir <span class="hint">— empty = auto</span>
+          <input name="workdir" placeholder="/path/to/repo" class="mono">
+        </label>
+      </div>
+      <details class="advanced">
+        <summary>Advanced options — role, grounding, quality gate, limits</summary>
+        <div class="grid">
+          <label class="field">Role <span class="hint">— roles/&lt;name&gt;.md</span>
+            <input name="role" placeholder="writer">
+          </label>
+          <label class="field">Model
+            <input name="model" placeholder="default from config">
+          </label>
+          <label class="field">Max iterations
+            <input name="max_iterations" type="number" min="1" placeholder="10">
+          </label>
+          <label class="field">Max cost (USD)
+            <input name="max_cost_usd" type="number" step="0.5" min="0.5" placeholder="5.0">
+          </label>
+          <label class="field full">Context command <span class="hint">— fresh grounding every iteration, stdout injected into the system prompt</span>
+            <input name="context_cmd" placeholder="python3 tools/build_knowledge.py --stdout" class="mono">
+          </label>
+          <label class="field full">Gate prompt <span class="hint">— LLM quality gate criteria after the verifier passes (empty = no gate)</span>
+            <textarea name="gate_prompt" rows="2" placeholder="Output must be >= 1000 words, original, all internal links valid."></textarea>
+          </label>
+        </div>
+      </details>
+      <div style="display:flex;align-items:center">
+        <button class="primary" type="submit">Run loop</button>
+        <span id="form-error" class="form-error"></span>
+      </div>
+    </form>
+
+    <div id="runs" class="runs"><div class="empty">loading…</div></div>
+
+    <section id="schedules-section" hidden>
+      <h2 class="sect">Schedules</h2>
+      <div id="schedules" class="sched-list"></div>
+    </section>
+
+    <section id="watchdog-section">
+      <h2 class="sect">Sentry watchdog</h2>
+      <div id="watchdog" class="sched-list"></div>
+    </section>
+
+  </main>
 
   <script src="/static/app.js"></script>
 </body>
