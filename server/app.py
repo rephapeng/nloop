@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from engine import config, grounding, triggers
 from engine.events import EventBus
+from engine.promo_reporter import PromoReporter
 from engine.scheduler import Scheduler
 from engine.store import Store
 from engine.telegram import TelegramBot
@@ -69,23 +70,27 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         worker = Worker(store, cfg, on_event=on_event)
         scheduler = Scheduler(store, cfg)
         watchdog = Watchdog(store, cfg)
+        promo_reporter = PromoReporter(bot, cfg)  # no-op sendiri kalau bot/enabled kosong
         worker_task = asyncio.create_task(worker.run_forever())
         sched_task = asyncio.create_task(scheduler.run_forever())
         wd_task = asyncio.create_task(watchdog.run_forever())
+        pr_task = asyncio.create_task(promo_reporter.run_forever())
         bot_task = asyncio.create_task(bot.run_forever()) if bot else None
         app.state.store, app.state.bus, app.state.worker = store, bus, worker
         app.state.scheduler, app.state.bot = scheduler, bot
         app.state.watchdog = watchdog
+        app.state.promo_reporter = promo_reporter
         yield
         if bot_task:                         # bot dulu (long-poll), baru worker
             bot_task.cancel()
             await asyncio.gather(bot_task, return_exceptions=True)
         if bot:
             await bot.stop()
+        await promo_reporter.stop()
         await watchdog.stop()
         await scheduler.stop()
         await worker.stop()
-        await asyncio.gather(worker_task, sched_task, wd_task)
+        await asyncio.gather(worker_task, sched_task, wd_task, pr_task)
 
     app = FastAPI(title="nloop", lifespan=lifespan)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

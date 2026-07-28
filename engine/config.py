@@ -59,6 +59,12 @@ DEFAULTS = {
         "max_turns": None,               # None = tanpa batas (beda dari claude.max_turns)
         "progress_interval_sec": 60,     # kirim update progres tiap N detik (0 = off)
     },
+    "promo_report": {                    # laporan traffic harian promo -> Telegram
+        "enabled": False,                # butuh telegram.enabled juga (kirim lewat bot)
+        "at": "14:30",                   # UTC = 21:30 WIB, abis slot sore & mayoritas hari kelewat
+        "days": 7,                       # window agregat/tren/breakdown (Hari ini & Kemarin selalu ada)
+        "send_on_start": False,          # kirim sekali pas server nyala, jangan nunggu jadwal
+    },
     "paths": {"db": "nloop.db", "workspaces": "workspaces", "roles": "roles"},
 }
 

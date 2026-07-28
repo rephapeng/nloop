@@ -128,6 +128,14 @@ schedules:
 
 # Bot Telegram: notif run selesai + kontrol (/loops /new /stop) + chat agent.
 # Secrets di .env (chmod 600, gitignored): TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_CHAT_IDS
+# Laporan traffic harian promo (Buffer -> PostHog attribution) didorong ke Telegram.
+# Deterministik (bukan loop claude) — cuma query PostHog + kirim teks, gratis.
+promo_report:
+  enabled: true
+  at: "14:30"              # UTC = 21:30 WIB, abis slot sore & mayoritas hari udah lewat
+  days: 7                  # window agregat/tren/breakdown (Hari ini & Kemarin selalu ada)
+  send_on_start: true      # kirim sekali begitu nloop nyala, nggak nunggu jadwal besok
+
 telegram:
   enabled: true
   notify: true             # broadcast run selesai ke semua chat allow-list
