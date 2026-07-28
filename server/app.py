@@ -16,9 +16,9 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
-from engine import config, grounding, triggers
+from engine import config, grounding, tasks, trace, triggers
 from engine.events import EventBus
 from engine.promo_reporter import PromoReporter
 from engine.scheduler import Scheduler
@@ -33,8 +33,12 @@ KEEPALIVE_SEC = 15
 
 
 class LoopCreate(BaseModel):
-    goal: str = Field(min_length=1)
-    verify_cmd: str = Field(min_length=1)
+    """Dua bentuk: `task` (+payload) dari registry, ATAU goal+verify_cmd ad-hoc."""
+    task: str | None = None         # id task di registry (engine/tasks.py)
+    payload: dict | None = None     # input template task
+    idempotency_key: str | None = None  # 1 run aktif per key (kolom fingerprint)
+    goal: str | None = None
+    verify_cmd: str | None = None
     workdir: str | None = None      # default: workspaces/<id> dibikinin
     model: str | None = None
     max_iterations: int | None = Field(default=None, ge=1)
@@ -43,9 +47,29 @@ class LoopCreate(BaseModel):
     context_cmd: str | None = None  # grounding segar tiap iterasi (stdout di-inject)
     gate_prompt: str | None = None  # kriteria LLM quality gate setelah verifier lolos
 
+    @model_validator(mode="after")
+    def _task_or_goal(self):
+        if not self.task and not (self.goal and self.verify_cmd):
+            raise ValueError("butuh 'task', atau pasangan 'goal' + 'verify_cmd'")
+        return self
+
+
+class TaskTrigger(BaseModel):
+    """Body POST /api/tasks/{id}/trigger — payload + override seperlunya."""
+    payload: dict = Field(default_factory=dict)
+    idempotency_key: str | None = None
+    workdir: str | None = None
+    model: str | None = None
+    max_iterations: int | None = Field(default=None, ge=1)
+    max_cost_usd: float | None = Field(default=None, gt=0)
+
+    def overrides(self) -> dict:
+        return {k: getattr(self, k) for k in tasks.OVERRIDABLE}
+
 
 def create_app(cfg: dict | None = None) -> FastAPI:
     cfg = cfg or config.load()
+    cfg["tasks"] = tasks.load_registry(cfg)  # config.yaml + tasks/<id>.yaml
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -104,6 +128,21 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         store: Store = request.app.state.store
         loops_cfg = cfg["loops"]
 
+        if body.task:  # jalur task registry — semua entry path ketemu di sini
+            try:
+                out = tasks.trigger(
+                    store, cfg, body.task, body.payload,
+                    idempotency_key=body.idempotency_key,
+                    overrides={k: getattr(body, k) for k in tasks.OVERRIDABLE},
+                )
+            except tasks.TaskError as e:
+                raise HTTPException(400, str(e))
+            if out["deduped"]:  # run yang sama masih aktif → tunjuk yang itu
+                return JSONResponse(status_code=200, content=out)
+            return {"run_id": out["run_id"], "status": "queued",
+                    "workdir": out["workdir"], "task": body.task,
+                    "deduped": False}
+
         workdir = body.workdir
         if workdir is None:
             workdir = os.path.join(cfg["paths"]["workspaces"], uuid.uuid4().hex[:8])
@@ -131,8 +170,71 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         return {"run_id": run_id, "status": "queued", "workdir": workdir}
 
     @app.get("/api/loops")
-    def list_loops(request: Request) -> list[dict]:
-        return request.app.state.store.list_runs()
+    def list_loops(request: Request, task: str | None = None,
+                   status: str | None = None, limit: int | None = None) -> list[dict]:
+        return request.app.state.store.list_runs(task_id=task, status=status,
+                                                 limit=limit)
+
+    @app.get("/api/tasks")
+    def list_tasks(request: Request) -> list[dict]:
+        """Registry task + ringkasan run terakhir (dasar halaman Tasks)."""
+        store: Store = request.app.state.store
+        registry = cfg.get("tasks") or {}
+        out = []
+        for task_id, spec in registry.items():
+            runs = store.list_runs(task_id=task_id, limit=5)
+            item = tasks.summary(task_id, spec)
+            item["triggerable"] = True
+            item["runs_recent"] = runs
+            item["last_run"] = runs[0] if runs else None
+            out.append(item)
+        # task bawaan (issue-fix dari webhook/watchdog) nggak ada di registry,
+        # tapi run-nya ada — tetap ditampilin biar halaman Tasks nggak bohong.
+        for row in store.task_ids():
+            if row["task_id"] in registry:
+                continue
+            runs = store.list_runs(task_id=row["task_id"], limit=5)
+            out.append({"id": row["task_id"], "name": row["task_id"],
+                        "description": "built-in (webhook/watchdog)",
+                        "triggerable": False, "required": [], "defaults": {},
+                        "runs_recent": runs, "last_run": runs[0] if runs else None})
+        return out
+
+    @app.get("/api/tasks/{task_id}")
+    def get_task(task_id: str, request: Request) -> dict:
+        store: Store = request.app.state.store
+        try:
+            spec = tasks.get(cfg, task_id)
+        except tasks.TaskError as e:
+            runs = store.list_runs(task_id=task_id, limit=50)
+            if not runs:  # bukan registry, nggak pernah jalan juga
+                raise HTTPException(404, str(e))
+            return {"id": task_id, "name": task_id, "triggerable": False,
+                    "description": "built-in (webhook/watchdog)", "runs": runs}
+        item = tasks.summary(task_id, spec)
+        item["triggerable"] = True
+        item["goal"] = spec.get("goal")
+        item["gate_prompt"] = spec.get("gate_prompt")
+        item["context_cmd"] = spec.get("context_cmd")
+        item["on_success_cmd"] = spec.get("on_success_cmd")
+        item["idempotency_key"] = spec.get("idempotency_key")
+        item["runs"] = store.list_runs(task_id=task_id, limit=50)
+        return item
+
+    @app.post("/api/tasks/{task_id}/trigger", status_code=201)
+    def trigger_task(task_id: str, body: TaskTrigger, request: Request):
+        """Jalanin task dengan payload (pola tasks.trigger() trigger.dev)."""
+        try:
+            out = tasks.trigger(
+                request.app.state.store, cfg, task_id, body.payload,
+                idempotency_key=body.idempotency_key, overrides=body.overrides(),
+            )
+        except tasks.TaskError as e:
+            code = 404 if "nggak ada di registry" in str(e) else 400
+            raise HTTPException(code, str(e))
+        if out["deduped"]:
+            return JSONResponse(status_code=200, content=out)
+        return out
 
     @app.get("/api/loops/{run_id}")
     def get_loop(run_id: str, request: Request) -> dict:
@@ -142,6 +244,15 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             raise HTTPException(404, "run tidak ditemukan")
         run["iterations"] = store.iterations(run_id)
         return run
+
+    @app.get("/api/loops/{run_id}/trace")
+    def get_trace(run_id: str, request: Request) -> dict:
+        """Span waterfall (Fase 12) — disusun dari iterations + events yang udah ada."""
+        store: Store = request.app.state.store
+        run = store.get_run(run_id)
+        if run is None:
+            raise HTTPException(404, "run tidak ditemukan")
+        return trace.build(run, store.iterations(run_id), store.events_since(run_id))
 
     @app.post("/api/loops/{run_id}/stop")
     def stop_loop(run_id: str, request: Request) -> dict:
@@ -262,6 +373,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
             "X-Accel-Buffering": "no",  # nginx: jangan buffer SSE
         })
 
+    # Halaman: shell + data di-fetch client-side (vanilla JS, tanpa build step)
     @app.get("/")
     def index() -> FileResponse:
         return FileResponse(STATIC_DIR / "index.html")
@@ -270,6 +382,18 @@ def create_app(cfg: dict | None = None) -> FastAPI:
     def run_page(run_id: str) -> FileResponse:
         # data di-fetch client-side pakai run_id dari URL
         return FileResponse(STATIC_DIR / "run.html")
+
+    @app.get("/tasks")
+    def tasks_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "tasks.html")
+
+    @app.get("/tasks/{task_id}")
+    def task_page(task_id: str) -> FileResponse:
+        return FileResponse(STATIC_DIR / "task.html")
+
+    @app.get("/schedules")
+    def schedules_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "schedules.html")
 
     return app
 

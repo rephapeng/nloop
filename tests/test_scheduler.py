@@ -59,7 +59,17 @@ def test_validate_skips_broken(cfg, store):
     s = Scheduler(store, cfg)
     assert s._validate("x", {"every": "1h"}) is True          # tanpa steps
     assert s._validate("x", {"steps": [{"goal": "g"}]}) is True  # tanpa at/every
-    assert s._validate("x", {"every": "1h", "goal": "g"}) is False
+    assert s._validate("x", {"every": "1h", "goal": "g"}) is True  # tanpa verify_cmd
+    assert s._validate("x", {"every": "1h", "goal": "g",
+                             "verify_cmd": "exit 0"}) is False
+
+
+def test_validate_step_task_harus_ada_di_registry(cfg, store):
+    s = Scheduler(store, cfg)
+    spec = {"every": "1h", "steps": [{"task": "hantu"}]}
+    assert s._validate("x", spec) is True
+    cfg["tasks"] = {"hantu": {"goal": "g", "verify_cmd": "v"}}
+    assert s._validate("x", spec) is False
 
 
 # ---- trigger: sekuensial + always + fingerprint ----
@@ -113,6 +123,37 @@ def test_step_fields_forwarded(store, cfg, tmp_path):
     assert r["role"] == "writer" and r["gate_prompt"] == "bagus"
     assert r["max_iterations"] == 3 and r["max_cost_usd"] == 1.5
     assert r["model"] == "opus"
+
+
+def test_step_task_dari_registry(store, cfg, tmp_path):
+    """Step `task:` + payload → run dari registry, fingerprint tetap schedule:<nama>."""
+    cfg["tasks"] = {"promo-post": {
+        "goal": "post slot {{slot}}", "verify_cmd": "verify --slot {{slot}}",
+        "workdir": str(tmp_path), "role": "buffer-promo",
+        "idempotency_key": "promo:{{slot}}",
+    }}
+    spec = {"every": "1h", "steps": [{"task": "promo-post", "payload": {"slot": "pagi"}}]}
+    (run_id,) = run_trigger(store, cfg, spec, ["succeeded"])
+    r = store.get_run(run_id)
+    assert r["goal"] == "post slot pagi" and r["verify_cmd"] == "verify --slot pagi"
+    assert r["task_id"] == "promo-post" and r["payload"] == {"slot": "pagi"}
+    assert r["fingerprint"] == "schedule:harian"   # dedup schedule yang menang
+    assert r["role"] == "buffer-promo"
+
+
+def test_step_task_payload_kurang_nggak_matiin_pipeline(store, cfg, tmp_path):
+    """Payload kurang = step gagal (di-log), step `always` berikutnya tetap jalan."""
+    cfg["tasks"] = {"t": {"goal": "{{wajib}}", "verify_cmd": "exit 0",
+                          "workdir": str(tmp_path),
+                          "payload": {"required": ["wajib"]}}}
+    spec = {"every": "1h", "steps": [
+        {"task": "t"},
+        {"goal": "step-2", "verify_cmd": "exit 0", "workdir": str(tmp_path),
+         "always": True},
+    ]}
+    run_ids = run_trigger(store, cfg, spec, ["succeeded"])
+    assert len(run_ids) == 1
+    assert store.get_run(run_ids[0])["goal"] == "step-2"
 
 
 def test_dedup_fingerprint_visible_while_active(store, cfg, tmp_path):

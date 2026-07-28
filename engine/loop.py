@@ -143,17 +143,19 @@ async def run_loop(run_id: str, store, cfg: dict, on_event=None) -> str:
 
         v = await verifier.verify(run["verify_cmd"], cwd=workdir)          # OBSERVE
         emit("verify", {"passed": v.passed, "exit_code": v.exit_code,
-                        "output": v.output[-1000:]})
+                        "output": v.output[-1000:], "duration": v.duration})
         gate_reasons: list[str] | None = None
         if v.passed:
             if not run.get("gate_prompt"):
                 status, reason = "succeeded", "verifier_passed"
                 break
+            gate_started = time.time()
             g_pass, g_reasons, g_cost = await _run_gate(run, cfg,          # GATE
                                                         workdir=workdir, emit=emit)
             cost_total += g_cost
             store.update_cost(run_id, cost_total)
-            emit("gate", {"passed": g_pass, "reasons": g_reasons, "cost": g_cost})
+            emit("gate", {"passed": g_pass, "reasons": g_reasons, "cost": g_cost,
+                          "duration": time.time() - gate_started})
             if g_pass:
                 status, reason = "succeeded", "gate_passed"
                 break
@@ -241,13 +243,15 @@ async def run_loop(run_id: str, store, cfg: dict, on_event=None) -> str:
         # Iterasi habis — aksi terakhir belum sempet diverifikasi, kasih kesempatan final
         v = await verifier.verify(run["verify_cmd"], cwd=workdir)
         emit("verify", {"passed": v.passed, "exit_code": v.exit_code,
-                        "output": v.output[-1000:]})
+                        "output": v.output[-1000:], "duration": v.duration})
         if v.passed and run.get("gate_prompt"):
+            gate_started = time.time()
             g_pass, g_reasons, g_cost = await _run_gate(run, cfg,
                                                         workdir=workdir, emit=emit)
             cost_total += g_cost
             store.update_cost(run_id, cost_total)
-            emit("gate", {"passed": g_pass, "reasons": g_reasons, "cost": g_cost})
+            emit("gate", {"passed": g_pass, "reasons": g_reasons, "cost": g_cost,
+                          "duration": time.time() - gate_started})
             status = "succeeded" if g_pass else "failed"
             reason = "gate_passed" if g_pass else "gate_rejected"
         else:
@@ -261,7 +265,8 @@ async def run_loop(run_id: str, store, cfg: dict, on_event=None) -> str:
             run["on_success_cmd"], cwd=workdir,
             timeout_sec=loops_cfg.get("postrun_timeout_sec", 600))
         emit("postrun", {"ok": p.passed, "exit_code": p.exit_code,
-                         "cmd": run["on_success_cmd"], "output": p.output[-1500:]})
+                         "cmd": run["on_success_cmd"], "output": p.output[-1500:],
+                         "duration": p.duration})
         if not p.passed:
             status, reason = "failed", "postrun_failed"
 

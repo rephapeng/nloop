@@ -18,6 +18,8 @@ import logging
 import re
 import time
 
+from engine import tasks
+
 log = logging.getLogger("nloop.scheduler")
 
 TERMINAL = ("succeeded", "failed", "stopped")
@@ -82,8 +84,14 @@ class Scheduler:
         """True = rusak (di-skip, jangan matiin server gara-gara config)."""
         try:
             next_delay(spec, time.time())
-            if not self._steps(spec):
-                raise ValueError("tanpa steps / goal")
+            steps = self._steps(spec)
+            if not steps:
+                raise ValueError("tanpa steps / goal / task")
+            for i, step in enumerate(steps, start=1):
+                if step.get("task"):
+                    tasks.get(self.cfg, step["task"])  # task nggak ada → skip schedule
+                elif not (step.get("goal") and step.get("verify_cmd")):
+                    raise ValueError(f"step {i}: butuh 'task' atau goal+verify_cmd")
             return False
         except (ValueError, TypeError) as e:
             log.error("schedule '%s' invalid, di-skip: %s", name, e)
@@ -106,37 +114,58 @@ class Scheduler:
 
     async def trigger(self, name: str, spec: dict) -> list[str]:
         """Jalankan steps berurutan sekali (dipakai tick & endpoint trigger manual)."""
-        loops_cfg = self.cfg["loops"]
         run_ids: list[str] = []
         prev_ok = True
         for i, step in enumerate(self._steps(spec), start=1):
             if not prev_ok and not step.get("always"):
                 log.info("schedule '%s' step %d di-skip (step sebelumnya gagal)", name, i)
                 continue
-            run_id = self.store.create_run(
-                step["goal"],
-                step["verify_cmd"],
-                step["workdir"],
-                model=step.get("model") or self.cfg["claude"].get("model"),
-                max_iterations=step.get("max_iterations") or loops_cfg["max_iterations"],
-                max_cost_usd=step.get("max_cost_usd") or loops_cfg["max_cost_usd"],
-                fingerprint=f"schedule:{name}",
-                role=step.get("role"),
-                context_cmd=step.get("context_cmd"),
-                gate_prompt=step.get("gate_prompt"),
-            )
+            try:
+                run_id = self._enqueue(name, step)
+            except tasks.TaskError as e:  # payload kurang dst. → step gagal, pipeline lanjut
+                log.error("schedule '%s' step %d gagal di-enqueue: %s", name, i, e)
+                prev_ok = False
+                continue
             run_ids.append(run_id)
             log.info("schedule '%s' step %d → run %s", name, i, run_id)
             status = await self._wait_terminal(run_id)
             prev_ok = status == "succeeded"
         return run_ids
 
+    def _enqueue(self, name: str, step: dict) -> str:
+        """Step → run. Dua bentuk: `task:` (+payload) dari registry, atau inline.
+
+        Fingerprint tetap `schedule:<nama>` (bukan idempotency key task-nya) —
+        dedup schedule yang berlaku: tick baru nggak numpuk di atas pipeline lama.
+        """
+        loops_cfg = self.cfg["loops"]
+        fingerprint = f"schedule:{name}"
+        if step.get("task"):
+            out = tasks.trigger(
+                self.store, self.cfg, step["task"], step.get("payload"),
+                idempotency_key=fingerprint,
+                overrides={k: step.get(k) for k in tasks.OVERRIDABLE},
+            )
+            return out["run_id"]
+        return self.store.create_run(
+            step["goal"],
+            step["verify_cmd"],
+            step["workdir"],
+            model=step.get("model") or self.cfg["claude"].get("model"),
+            max_iterations=step.get("max_iterations") or loops_cfg["max_iterations"],
+            max_cost_usd=step.get("max_cost_usd") or loops_cfg["max_cost_usd"],
+            fingerprint=fingerprint,
+            role=step.get("role"),
+            context_cmd=step.get("context_cmd"),
+            gate_prompt=step.get("gate_prompt"),
+        )
+
     @staticmethod
     def _steps(spec: dict) -> list[dict]:
-        """`steps: [...]` atau bentuk pendek: field run langsung di spec."""
+        """`steps: [...]` atau bentuk pendek: field run/task langsung di spec."""
         if spec.get("steps"):
             return list(spec["steps"])
-        if spec.get("goal"):
+        if spec.get("goal") or spec.get("task"):
             return [spec]
         return []
 

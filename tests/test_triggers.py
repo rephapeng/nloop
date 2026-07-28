@@ -190,3 +190,48 @@ def test_webhook_posthog(client):
                     json=POSTHOG_PAYLOAD)
     assert r.status_code == 201
     assert r.json()["fingerprint"] == "posthog:ph-42"
+
+
+# ---- Fase 10: issue run nyambung ke model task ----
+
+def test_issue_run_dicatat_sebagai_task_issue_fix(client):
+    r = client.post(HOOK, json=SENTRY_PAYLOAD).json()
+    run = client.get(f"/api/loops/{r['run_id']}").json()
+    assert run["task_id"] == "issue-fix"
+    assert run["payload"]["source"] == "sentry"
+    assert run["payload"]["fingerprint"] == "sentry:sentry-123"
+    # task bawaan muncul di /api/tasks walau nggak ada di registry
+    builtin = [t for t in client.get("/api/tasks").json() if t["id"] == "issue-fix"]
+    assert builtin and builtin[0]["triggerable"] is False
+
+
+def test_project_boleh_nunjuk_task_registry(monkeypatch, tmp_path, project_dir):
+    """triggers.projects.<x>.task → issue dikerjain task custom, payload = issue."""
+    async def fake_run(prompt, *, cwd, resume=None, **kwargs):
+        (Path(cwd) / "done.txt").write_text("ok")
+        return ClaudeResult(ok=True, subtype="success", result_text="ok",
+                            session_id="s", cost_usd=0.01, num_turns=1)
+
+    monkeypatch.setattr(loop.claude_cli, "run", fake_run)
+    cfg = config.load("/nonexistent")
+    cfg["paths"]["db"] = str(tmp_path / "trig2.db")
+    cfg["paths"]["workspaces"] = str(tmp_path / "ws2")
+    cfg["paths"]["tasks"] = str(tmp_path / "tasks-kosong")
+    cfg["loops"]["poll_interval_sec"] = 0.02
+    cfg["tasks"] = {"triase": {
+        "goal": "Triase issue: {{title}} (dari {{source}})",
+        "verify_cmd": "test -f done.txt",
+        "workdir": str(project_dir),
+    }}
+    cfg["triggers"] = {
+        "token": None, "sentry": {"resolve": False, "url": "https://sentry.io"},
+        "projects": {"demo": {"workdir": str(project_dir), "verify_cmd": "exit 0",
+                              "task": "triase"}},
+    }
+    with TestClient(create_app(cfg)) as c:
+        r = c.post("/api/hooks/sentry?project=demo", json=SENTRY_PAYLOAD).json()
+        run = c.get(f"/api/loops/{r['run_id']}").json()
+        assert run["task_id"] == "triase"
+        assert run["goal"].startswith("Triase issue: TypeError")
+        assert "dari sentry" in run["goal"]
+        assert run["fingerprint"] == "sentry:sentry-123"   # dedup issue tetap jalan

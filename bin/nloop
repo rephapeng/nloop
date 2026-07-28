@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """nloop CLI — kontrol engine dari terminal (pola bin/dtc).
 
-  nloop new "<goal>" "<verify_cmd>" [workdir]   antri loop baru
-  nloop ls                                      daftar run + status + cost
+  nloop new "<goal>" "<verify_cmd>" [workdir]   antri loop baru (ad-hoc)
+  nloop tasks                                   daftar task di registry
+  nloop run <task> [k=v ...]                    trigger task dengan payload
+  nloop ls [--task X] [--status X]              daftar run + status + cost
   nloop show <run_id>                           detail run + iterasi
   nloop stop <run_id>                           minta stop
   nloop schedules                               daftar schedule + status
@@ -62,11 +64,54 @@ def cmd_new(args: list[str]) -> None:
     print(f"run {out['run_id']} queued  workdir={out['workdir']}")
 
 
-def cmd_ls(_args: list[str]) -> None:
-    for r in api("GET", "/api/loops"):
+def cmd_tasks(_args: list[str]) -> None:
+    items = api("GET", "/api/tasks")
+    if not items:
+        print("(registry kosong — isi `tasks:` di config.yaml atau tasks/<id>.yaml)")
+        return
+    for t in items:
+        req = ",".join(t.get("required") or []) or "-"
+        last = t.get("last_run")
+        tail = f"  terakhir: {last['status']} ({last['id']})" if last else ""
+        kind = "" if t.get("triggerable") else "  [built-in]"
+        print(f"{t['id']:<20} payload: {req:<24} {t.get('name', '')}{kind}{tail}")
+
+
+def cmd_run(args: list[str]) -> None:
+    """nloop run <task> slot=pagi n=3 — value dicoba di-parse JSON dulu (angka/bool)."""
+    if not args:
+        die('usage: nloop run <task> [key=value ...]')
+    task, payload = args[0], {}
+    for pair in args[1:]:
+        if "=" not in pair:
+            die(f"payload harus key=value: {pair}")
+        k, v = pair.split("=", 1)
+        try:
+            payload[k] = json.loads(v)
+        except ValueError:
+            payload[k] = v
+    out = api("POST", f"/api/tasks/{task}/trigger", {"payload": payload})
+    if out.get("deduped"):
+        print(f"run {out['run_id']} masih aktif buat key '{out['idempotency_key']}' "
+              "— nggak bikin run baru")
+    else:
+        print(f"run {out['run_id']} queued  task={task}  workdir={out['workdir']}")
+
+
+def cmd_ls(args: list[str]) -> None:
+    q = []
+    for flag, key in (("--task", "task"), ("--status", "status")):
+        if flag in args:
+            i = args.index(flag)
+            if i + 1 >= len(args):
+                die(f"{flag} butuh nilai")
+            q.append(f"{key}={args[i + 1]}")
+    path = "/api/loops" + ("?" + "&".join(q) if q else "")
+    for r in api("GET", path):
         goal = r["goal"].splitlines()[0][:60]
+        task = f"[{r['task_id']}] " if r.get("task_id") else ""
         print(f"{r['id']}  {r['status']:<9}  it {r['iterations_done']}/{r['max_iterations']}"
-              f"  ${r['cost_total']:.2f}  {goal}")
+              f"  ${r['cost_total']:.2f}  {task}{goal}")
 
 
 def cmd_show(args: list[str]) -> None:
@@ -140,7 +185,8 @@ def die(msg: str) -> None:
 
 
 COMMANDS = {"new": cmd_new, "ls": cmd_ls, "show": cmd_show, "stop": cmd_stop,
-            "schedules": cmd_schedules, "trigger": cmd_trigger, "ask": cmd_ask}
+            "schedules": cmd_schedules, "trigger": cmd_trigger, "ask": cmd_ask,
+            "tasks": cmd_tasks, "run": cmd_run}
 
 
 def main() -> None:

@@ -297,6 +297,68 @@ dtc-agent (github.com/rephapeng/dtc-agent) ke nloop; payload devtocash-specific
   Guardrail: dedup fingerprint aktif, cooldown per-issue (default 24h), cap
   `max_per_tick`. Endpoint: `GET /api/watchdog`, `POST /api/watchdog/tick`.
 
+**Fase 10 — Task registry + payload (SELESAI 2026-07-28).** Arah baru: bikin nloop
+sedekat mungkin ke model kerja trigger.dev. Sampai Fase 9b, "run" itu barang sekali
+pakai — goal + verify_cmd string yang disusun ulang di tiap entry path (REST,
+scheduler, webhook, Telegram), nggak ada objek "task" yang bisa dilihat, dipanggil
+ulang dengan input beda, atau di-test. Fase 10 nambahin unit kerja itu.
+- `engine/tasks.py` — registry: `tasks:` di config.yaml ATAU `tasks/<id>.yaml`
+  (satu file satu task; file menang atas config). Spec rusak di-log & di-skip,
+  bukan bikin server mati (pola scheduler `_validate`).
+- Template `{{var}}` / `{{payload.var}}` di goal/verify_cmd/workdir/context_cmd/
+  gate_prompt/on_success_cmd/idempotency_key. Variabel nggak ada di payload =
+  `TaskError` waktu trigger, BUKAN string kosong — goal bolong bikin agent ngarang.
+- `payload: {required: [...], defaults: {...}}` — divalidasi sebelum run dibikin.
+- `tasks.trigger(store, cfg, task_id, payload)` = SATU pintu semua entry path.
+  Dedup pakai idempotency key (kolom `runs.fingerprint` yang udah ada): selama run
+  dengan key sama masih aktif, trigger kedua nunjuk run itu, bukan bikin baru.
+- Override per-trigger dibatasi `OVERRIDABLE` (model/limit/workdir). Payload nggak
+  boleh ngubah `role`/`verify_cmd` — itu jalur eskalasi, bukan parameter.
+- Data model: `runs.task_id` + `runs.payload` (JSON, di-decode di `Store`).
+- API: `GET /api/tasks`, `GET /api/tasks/{id}`, `POST /api/tasks/{id}/trigger`,
+  `POST /api/loops {task, payload}`, filter `GET /api/loops?task=&status=&limit=`.
+  CLI: `nloop tasks`, `nloop run <task> k=v`. Schedule step: `task:` + `payload:`.
+- Webhook/watchdog: pipeline issue-fix bawaan tetap (goal repro-first bikinan
+  `build_goal`), cuma dicatat `task_id='issue-fix'` biar kekelompok di dashboard;
+  project boleh nunjuk task registry sendiri lewat `triggers.projects.<x>.task`.
+✅ `promo-pagi`/`promo-sore` yang dulu dua blok goal kembar → satu task `promo-post`
+   dipanggil dua kali dengan payload `{slot: pagi|sore}`.
+✅ Trigger task yang sama dua kali selagi aktif → run kedua nggak dibikin (deduped).
+✅ Payload kurang → 400 sebelum run masuk antrian, bukan gagal di tengah loop.
+
+**Fase 11 — Queue + retry + replay + run tree (BELUM).** Lanjutan pendekatan
+trigger.dev, sisi eksekusi:
+- Named queue (`queue:` di task) + cap concurrency per-queue, gantiin satu
+  `asyncio.Semaphore` global — sekarang loop promo & loop issue-fix rebutan slot
+  yang sama. Plus priority sederhana.
+- Retry level-RUN + backoff (`retry: {max_attempts, backoff}`) + kolom `attempt`.
+  Yang ada sekarang cuma retry dalam-iterasi buat error transient claude.
+- `POST /api/loops/{id}/replay` — jalanin ulang task+payload yang sama sebagai run
+  baru yang nunjuk induknya.
+- `runs.parent_run_id` — step schedule jadi anak dari satu run pipeline (subtask),
+  bukan run sejajar yang cuma nyambung lewat fingerprint.
+
+**Fase 12 — Dashboard ala trigger.dev (SELESAI 2026-07-28, dimajuin sebelum Fase 11).**
+Tetap vanilla JS tanpa build step; `app.js` lama dipecah jadi `common.js` (helper +
+shell) + satu script per halaman.
+- Shell sidebar: Runs / Tasks / Schedules + indikator run aktif & health server.
+- **Runs**: tabel yang bisa difilter (pill status, filter task, cari goal/id).
+  Filter disimpan di query URL → tampilan bisa di-share. Watchdog & schedule
+  pindah ke halaman sendiri biar halaman run cuma soal run.
+- **Tasks**: kartu registry + halaman detail berisi spec, run terakhir, dan form
+  **Test task** yang dibangun dari `payload.required`/`defaults` — trigger manual
+  tanpa perlu curl.
+- **Run detail**: `engine/trace.py` nyusun span dari `iterations` + `events` (tanpa
+  tabel baru, tanpa nulis apa-apa), di-serve `GET /api/loops/{id}/trace`, digambar
+  jadi waterfall + panel detail span. Log lama tetap ada, sekarang bisa difilter
+  (turn / tool / verify+gate / warning).
+- Kejujuran durasi: verify/gate/postrun sekarang nyimpen durasi asli di payload
+  event; act ambil dari tabel `iterations`. Span yang ujungnya cuma bisa DITAKSIR
+  (tool — stream cuma punya satu timestamp) ditandai `approx` dan digambar
+  bergaris miring. Run lama (sebelum fase ini) verify-nya juga approx.
+- Tool span dipotong di `TOOL_CAP` per iterasi, sisanya diringkas jadi span
+  "+N tool call lagi" — bukan dipotong diem-diem.
+
 ---
 
 ## Guardrails (wajib)

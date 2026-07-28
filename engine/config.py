@@ -38,6 +38,8 @@ DEFAULTS = {
         # (token dari .env: SENTRY_AUTH_TOKEN)
         "sentry": {"resolve": False, "url": "https://sentry.io"},
     },
+    "tasks": {},                         # Fase 10: registry task reusable (lihat engine/tasks.py).
+                                         # Bisa juga file <paths.tasks>/<id>.yaml — file menang.
     "schedules": {},                     # loop terjadwal (port systemd-timer dtc), contoh di config.yaml
     "watchdog": {                        # poll Sentry cari issue unresolved → spawn loop
         "enabled": False,
@@ -65,7 +67,8 @@ DEFAULTS = {
         "days": 7,                       # window agregat/tren/breakdown (Hari ini & Kemarin selalu ada)
         "send_on_start": False,          # kirim sekali pas server nyala, jangan nunggu jadwal
     },
-    "paths": {"db": "nloop.db", "workspaces": "workspaces", "roles": "roles"},
+    "paths": {"db": "nloop.db", "workspaces": "workspaces", "roles": "roles",
+              "tasks": "tasks"},
 }
 
 

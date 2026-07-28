@@ -44,12 +44,16 @@ def test_health(client):
 
 
 def test_dashboard_pages_served(client):
-    r = client.get("/")
-    assert r.status_code == 200 and 'data-page="index"' in r.text
-    r = client.get("/run/apapun-id-nya")
-    assert r.status_code == 200 and 'data-page="run"' in r.text
-    r = client.get("/static/app.js")
-    assert r.status_code == 200 and "EventSource" in r.text
+    for path, page in (("/", "index"), ("/run/apapun-id-nya", "run"),
+                       ("/tasks", "tasks"), ("/tasks/apa-aja", "task"),
+                       ("/schedules", "schedules")):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert f'data-page="{page}"' in r.text, path
+    for asset in ("common.js", "runs.js", "run.js", "tasks.js", "schedules.js",
+                  "style.css"):
+        assert client.get(f"/static/{asset}").status_code == 200, asset
+    assert "EventSource" in client.get("/static/run.js").text
 
 
 def test_create_loop_runs_to_success(client):
@@ -161,6 +165,103 @@ def test_schedule_listed_and_manual_trigger_runs_pipeline(client_sched):
     assert all(x["fingerprint"] == "schedule:pipa" for x in done)
 
 
+@pytest.fixture
+def client_tasks(monkeypatch, tmp_path):
+    """Client dengan satu task di registry (Fase 10)."""
+    async def fake_run(prompt, *, cwd, resume=None, **kwargs):
+        (Path(cwd) / "done.txt").write_text("ok")
+        return ClaudeResult(ok=True, subtype="success", result_text="ok",
+                            session_id="s", cost_usd=0.01, num_turns=1)
+
+    monkeypatch.setattr(loop.claude_cli, "run", fake_run)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    cfg = config.load("/nonexistent")
+    cfg["paths"]["db"] = str(tmp_path / "api.db")
+    cfg["paths"]["workspaces"] = str(ws)
+    cfg["paths"]["tasks"] = str(tmp_path / "tasks-kosong")
+    cfg["loops"]["poll_interval_sec"] = 0.02
+    cfg["tasks"] = {"buat-file": {
+        "name": "Bikin file",
+        "goal": "bikin {{file}} di workdir ini",
+        "verify_cmd": "test -f {{file}}",
+        "workdir": str(ws),
+        "payload": {"required": ["file"]},
+        "idempotency_key": "file:{{file}}",
+    }}
+    with TestClient(create_app(cfg)) as c:
+        yield c
+
+
+def test_list_tasks(client_tasks):
+    items = client_tasks.get("/api/tasks").json()
+    assert [t["id"] for t in items] == ["buat-file"]
+    assert items[0]["required"] == ["file"] and items[0]["triggerable"] is True
+    assert items[0]["last_run"] is None
+
+
+def test_trigger_task_runs_to_success(client_tasks):
+    r = client_tasks.post("/api/tasks/buat-file/trigger",
+                          json={"payload": {"file": "done.txt"}})
+    assert r.status_code == 201
+    body = r.json()
+    assert body["deduped"] is False and body["task"] == "buat-file"
+
+    wait_status(client_tasks, body["run_id"], "succeeded")
+    run = client_tasks.get(f"/api/loops/{body['run_id']}").json()
+    assert run["task_id"] == "buat-file"
+    assert run["payload"] == {"file": "done.txt"}
+    assert run["goal"] == "bikin done.txt di workdir ini"
+    assert run["fingerprint"] == "file:done.txt"
+
+
+def test_trigger_task_payload_kurang_400(client_tasks):
+    r = client_tasks.post("/api/tasks/buat-file/trigger", json={"payload": {}})
+    assert r.status_code == 400 and "file" in r.json()["detail"]
+
+
+def test_trigger_task_nggak_ada_404(client_tasks):
+    assert client_tasks.post("/api/tasks/hantu/trigger", json={}).status_code == 404
+    assert client_tasks.get("/api/tasks/hantu").status_code == 404
+
+
+def test_trigger_task_dedup_pakai_idempotency_key(client_tasks):
+    body = {"payload": {"file": "never.txt"}}   # verify nggak bakal lolos → run nyangkut
+    first = client_tasks.post("/api/tasks/buat-file/trigger", json=body).json()
+    again = client_tasks.post("/api/tasks/buat-file/trigger", json=body)
+    assert again.status_code == 200
+    assert again.json() == {"run_id": first["run_id"], "task": "buat-file",
+                            "deduped": True, "idempotency_key": "file:never.txt"}
+
+
+def test_create_loop_pakai_task(client_tasks):
+    r = client_tasks.post("/api/loops", json={
+        "task": "buat-file", "payload": {"file": "done.txt"}, "max_iterations": 3})
+    assert r.status_code == 201 and r.json()["task"] == "buat-file"
+    run = client_tasks.get(f"/api/loops/{r.json()['run_id']}").json()
+    assert run["max_iterations"] == 3          # override per-trigger kepakai
+
+
+def test_create_loop_butuh_task_atau_goal(client_tasks):
+    assert client_tasks.post("/api/loops", json={}).status_code == 422
+    assert client_tasks.post("/api/loops", json={"goal": "g"}).status_code == 422
+
+
+def test_task_detail_dan_filter_run(client_tasks):
+    r = client_tasks.post("/api/tasks/buat-file/trigger",
+                          json={"payload": {"file": "done.txt"}}).json()
+    wait_status(client_tasks, r["run_id"], "succeeded")
+
+    detail = client_tasks.get("/api/tasks/buat-file").json()
+    assert detail["goal"].startswith("bikin {{file}}")     # spec mentah, belum di-render
+    assert [x["id"] for x in detail["runs"]] == [r["run_id"]]
+
+    assert [x["id"] for x in client_tasks.get("/api/loops?task=buat-file").json()] \
+        == [r["run_id"]]
+    assert client_tasks.get("/api/loops?task=lain").json() == []
+    assert client_tasks.get("/api/loops?status=succeeded").json()[0]["id"] == r["run_id"]
+
+
 def test_sse_replay_with_after_cursor(client):
     r = client.post("/api/loops", json={"goal": "g", "verify_cmd": VERIFY}).json()
     wait_status(client, r["run_id"], "succeeded")
@@ -180,3 +281,25 @@ def test_sse_replay_with_after_cursor(client):
             "GET", f"/api/loops/{r['run_id']}/events?after={last_id}") as resp:
         lines = [l for l in resp.iter_lines() if l.startswith("event: ")]
     assert lines == ["event: done"]
+
+
+# ---- Fase 12: endpoint trace buat waterfall ----
+
+def test_trace_endpoint(client):
+    r = client.post("/api/loops", json={"goal": "g", "verify_cmd": VERIFY}).json()
+    wait_status(client, r["run_id"], "succeeded")
+    t = client.get(f"/api/loops/{r['run_id']}/trace").json()
+
+    kinds = [s["kind"] for s in t["spans"]]
+    assert kinds[0] == "run" and "iteration" in kinds and "act" in kinds
+    assert "verify" in kinds
+    assert t["end"] >= t["start"]
+    ids = {s["id"] for s in t["spans"]}
+    assert all(s["parent_id"] in ids for s in t["spans"] if s["parent_id"])
+    # durasi verify dicatat beneran (bukan taksiran) sejak Fase 12
+    verify = [s for s in t["spans"] if s["kind"] == "verify"]
+    assert all(s["approx"] is False for s in verify)
+
+
+def test_trace_404(client):
+    assert client.get("/api/loops/ghost/trace").status_code == 404

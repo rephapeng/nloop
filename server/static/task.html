@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>nloop — task</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔁</text></svg>">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body data-page="task" data-nav="tasks">
+
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="content">
+    <header class="page-head">
+      <h1><a href="/tasks" class="crumb-link">Tasks</a> / <code id="task-id">…</code></h1>
+    </header>
+
+    <section class="card pad">
+      <h2 class="card-title" id="task-name">…</h2>
+      <p class="faint" id="task-desc"></p>
+    </section>
+
+    <div class="two-col">
+      <section>
+        <h2 class="sect">Test task</h2>
+        <div class="card pad" id="test-panel"></div>
+      </section>
+      <section>
+        <h2 class="sect">Definisi</h2>
+        <div class="card pad" id="spec"></div>
+      </section>
+    </div>
+
+    <h2 class="sect">Run terakhir</h2>
+    <div class="table-wrap card">
+      <table class="tbl">
+        <thead>
+          <tr><th>Status</th><th>Run</th><th>Payload</th><th class="num">Iterasi</th>
+              <th class="num">Cost</th><th class="num">Durasi</th><th class="num">Mulai</th></tr>
+        </thead>
+        <tbody id="task-runs"></tbody>
+      </table>
+    </div>
+  </main>
+
+  <script src="/static/common.js"></script>
+  <script src="/static/tasks.js"></script>
+</body>
+</html>

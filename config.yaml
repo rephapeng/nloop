@@ -72,43 +72,49 @@ watchdog:
 memory:
   provider: local          # local | selfmem  (Fase 8)
 
+# Task registry (Fase 10) — definisi kerjaan yang bisa dipanggil ULANG dengan
+# payload beda, dari mana aja: schedule, `bin/nloop run`, POST /api/tasks/<id>/trigger,
+# webhook. Field {{var}} diisi dari payload waktu trigger (variabel nggak ada =
+# error, biar goal nggak bolong). Alternatif: taruh satu task per file di tasks/<id>.yaml.
+tasks:
+  promo-post:
+    name: "Promo post MarginIn"
+    description: >-
+      Gimmick post promosi (twitter + threads) dijadwalin ke Buffer. Slot pagi
+      terbit 07:30 WIB, sore 19:00 WIB (jam post diatur scripts/buffer_post.py).
+    payload:
+      required: [slot]     # pagi | sore
+    goal: >-
+      Bikin gimmick post promosi MarginIn buat slot {{slot}}: 1 post twitter +
+      1 post threads, jadwalin ke Buffer pake
+      /opt/nloop/.venv/bin/python3 /opt/nloop/scripts/buffer_post.py post
+      --slot {{slot}}. Ikuti aturan konten di role.
+    verify_cmd: ".venv/bin/python3 scripts/buffer_post.py verify --slot {{slot}}"
+    workdir: /opt/nloop
+    role: buffer-promo
+    context_cmd: ".venv/bin/python3 scripts/buffer_post.py recent -n 10"
+    max_iterations: 4
+    max_cost_usd: 1.5
+    idempotency_key: "promo:{{slot}}"   # 1 run aktif per slot, trigger dobel nggak numpuk
+
 # Loop terjadwal (port systemd-timer + pipeline dtc-agent). `at` = harian UTC,
 # atau `every` = interval (30m/6h/1d). Steps jalan BERURUTAN; step berikut cuma
-# jalan kalau sebelumnya succeeded, kecuali `always: true`.
+# jalan kalau sebelumnya succeeded, kecuali `always: true`. Step = `task:` +
+# `payload:` (registry di atas) ATAU goal+verify_cmd inline.
 #
-# promo-pagi/sore: gimmick post MarginIn -> Buffer (twitter + threads), terbit di
-# primetime WIB (pagi 07:30, sore 19:00 — jam post diatur scripts/buffer_post.py).
-# Run nyala ~45 menit sebelum jam post biar agent sempet nulis. Token Buffer di
-# .env (BUFFER_ACCESS_TOKEN).
+# promo-pagi/sore: task yang SAMA, payload beda — run nyala ~45 menit sebelum jam
+# post biar agent sempet nulis. Token Buffer di .env (BUFFER_ACCESS_TOKEN).
 schedules:
   promo-pagi:
     at: "23:45"            # UTC = 06:45 WIB -> post terbit 07:30 WIB
     steps:
-      - goal: >-
-          Bikin gimmick post promosi MarginIn buat slot PAGI: 1 post twitter +
-          1 post threads, jadwalin ke Buffer pake
-          /opt/nloop/.venv/bin/python3 /opt/nloop/scripts/buffer_post.py post
-          --slot pagi. Ikuti aturan konten di role.
-        workdir: /opt/nloop
-        verify_cmd: ".venv/bin/python3 scripts/buffer_post.py verify --slot pagi"
-        role: buffer-promo
-        context_cmd: ".venv/bin/python3 scripts/buffer_post.py recent -n 10"
-        max_iterations: 4
-        max_cost_usd: 1.5
+      - task: promo-post
+        payload: {slot: pagi}
   promo-sore:
     at: "11:15"            # UTC = 18:15 WIB -> post terbit 19:00 WIB
     steps:
-      - goal: >-
-          Bikin gimmick post promosi MarginIn buat slot SORE: 1 post twitter +
-          1 post threads, jadwalin ke Buffer pake
-          /opt/nloop/.venv/bin/python3 /opt/nloop/scripts/buffer_post.py post
-          --slot sore. Ikuti aturan konten di role.
-        workdir: /opt/nloop
-        verify_cmd: ".venv/bin/python3 scripts/buffer_post.py verify --slot sore"
-        role: buffer-promo
-        context_cmd: ".venv/bin/python3 scripts/buffer_post.py recent -n 10"
-        max_iterations: 4
-        max_cost_usd: 1.5
+      - task: promo-post
+        payload: {slot: sore}
 # schedules:
 #   daily-content:
 #     at: "01:04"
@@ -153,3 +159,4 @@ paths:
   db: nloop.db
   workspaces: workspaces
   roles: roles             # roles/<nama>.md + roles/common.md (system prompt)
+  tasks: tasks             # tasks/<id>.yaml — task registry per file (nimpa `tasks:` di atas)

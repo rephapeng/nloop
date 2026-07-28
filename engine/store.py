@@ -19,6 +19,8 @@ CREATE TABLE IF NOT EXISTS runs(
   verify_cmd TEXT NOT NULL,
   workdir TEXT NOT NULL,
   model TEXT,
+  task_id TEXT,                            -- Fase 10: run ini instansi task apa
+  payload TEXT,                            -- JSON: input trigger (template goal/verify)
   status TEXT NOT NULL DEFAULT 'queued',   -- queued|running|succeeded|failed|stopped
   stop_requested INTEGER NOT NULL DEFAULT 0,
   max_iterations INTEGER NOT NULL DEFAULT 10,
@@ -56,6 +58,19 @@ CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status);
 """
 
 
+def _run_row(row) -> dict | None:
+    """Row runs → dict, payload JSON di-decode (caller nggak usah tahu storagenya)."""
+    if row is None:
+        return None
+    d = dict(row)
+    if d.get("payload"):
+        try:
+            d["payload"] = json.loads(d["payload"])
+        except (TypeError, ValueError):
+            d["payload"] = None
+    return d
+
+
 class Store:
     def __init__(self, path: str = "nloop.db"):
         self.db = sqlite3.connect(path, check_same_thread=False)
@@ -72,9 +87,14 @@ class Store:
             self.db.execute("ALTER TABLE runs ADD COLUMN fingerprint TEXT")
         # Fase 9 (port dtc-agent): role prompt, grounding cmd, LLM gate.
         # on_success_cmd: langkah rilis setelah fix terverifikasi (push+deploy).
-        for col in ("role", "context_cmd", "gate_prompt", "on_success_cmd"):
+        # Fase 10: task_id + payload (run = instansi task, bukan barang sekali pakai).
+        for col in ("role", "context_cmd", "gate_prompt", "on_success_cmd",
+                    "task_id", "payload"):
             if col not in cols:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
+        # index nyusul ALTER — DB lama belum punya kolomnya waktu SCHEMA jalan
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(task_id, created_at)")
 
     # ---- runs ----
 
@@ -92,16 +112,20 @@ class Store:
         context_cmd: str | None = None,
         gate_prompt: str | None = None,
         on_success_cmd: str | None = None,
+        task_id: str | None = None,
+        payload: dict | None = None,
     ) -> str:
         run_id = uuid.uuid4().hex[:12]
         self.db.execute(
             "INSERT INTO runs(id, goal, verify_cmd, workdir, model,"
             " max_iterations, max_cost_usd, fingerprint, role, context_cmd,"
-            " gate_prompt, on_success_cmd, created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " gate_prompt, on_success_cmd, task_id, payload, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, goal, verify_cmd, workdir, model,
              max_iterations, max_cost_usd, fingerprint, role, context_cmd,
-             gate_prompt, on_success_cmd, time.time()),
+             gate_prompt, on_success_cmd, task_id,
+             json.dumps(payload, ensure_ascii=False) if payload else None,
+             time.time()),
         )
         self.db.commit()
         return run_id
@@ -121,14 +145,37 @@ class Store:
             "SELECT * FROM runs WHERE fingerprint=? ORDER BY created_at DESC LIMIT 1",
             (fingerprint,),
         ).fetchone()
-        return dict(row) if row else None
+        return _run_row(row)
 
     def get_run(self, run_id: str) -> dict | None:
         row = self.db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
-        return dict(row) if row else None
+        return _run_row(row)
 
-    def list_runs(self) -> list[dict]:
-        rows = self.db.execute("SELECT * FROM runs ORDER BY created_at DESC").fetchall()
+    def list_runs(self, *, task_id: str | None = None, status: str | None = None,
+                  limit: int | None = None) -> list[dict]:
+        sql = "SELECT * FROM runs"
+        where, params = [], []
+        if task_id:
+            where.append("task_id=?")
+            params.append(task_id)
+        if status:
+            where.append("status=?")
+            params.append(status)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC"
+        if limit:
+            sql += " LIMIT ?"
+            params.append(limit)
+        return [_run_row(r) for r in self.db.execute(sql, params).fetchall()]
+
+    def task_ids(self) -> list[dict]:
+        """task_id yang pernah jalan + jumlah run. Dipakai dashboard buat nampilin
+        task bawaan (mis. issue-fix) yang nggak kedaftar di registry config."""
+        rows = self.db.execute(
+            "SELECT task_id, COUNT(*) AS runs, MAX(created_at) AS last_at FROM runs"
+            " WHERE task_id IS NOT NULL GROUP BY task_id ORDER BY last_at DESC"
+        ).fetchall()
         return [dict(r) for r in rows]
 
     def mark_started(self, run_id: str) -> None:

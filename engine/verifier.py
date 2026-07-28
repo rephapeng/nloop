@@ -5,6 +5,7 @@ Sengaja TERPISAH dari agent — agent nggak boleh nilai dirinya sendiri selesai.
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass
 
 
@@ -13,6 +14,7 @@ class VerifyResult:
     passed: bool
     exit_code: int
     output: str  # stdout+stderr digabung, di-cap dari ekor
+    duration: float = 0.0  # detik — dipakai span waterfall dashboard (Fase 12)
 
 
 async def verify(
@@ -22,6 +24,7 @@ async def verify(
     timeout_sec: int = 300,
     output_cap: int = 4000,
 ) -> VerifyResult:
+    started = time.time()
     proc = await asyncio.create_subprocess_shell(
         cmd,
         cwd=cwd,
@@ -34,9 +37,11 @@ async def verify(
     except TimeoutError:
         proc.kill()
         await proc.wait()
-        return VerifyResult(False, -1, f"[verifier timeout {timeout_sec}s]")
+        return VerifyResult(False, -1, f"[verifier timeout {timeout_sec}s]",
+                            time.time() - started)
 
     text = out.decode("utf-8", "replace")
     if len(text) > output_cap:
         text = "...[dipotong]...\n" + text[-output_cap:]
-    return VerifyResult(proc.returncode == 0, proc.returncode or 0, text)
+    return VerifyResult(proc.returncode == 0, proc.returncode or 0, text,
+                        time.time() - started)

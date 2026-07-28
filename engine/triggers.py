@@ -17,7 +17,10 @@ from __future__ import annotations
 import hashlib
 import re
 
+from engine import tasks
+
 REPRO_DIR = ".nloop/repro"
+ISSUE_TASK = "issue-fix"   # task_id bawaan buat run dari webhook/watchdog
 
 
 def _dig(d: dict, *paths: str):
@@ -84,7 +87,22 @@ def compose_verify(project_verify_cmd: str, rpath: str) -> str:
 
 def create_issue_run(store, cfg: dict, proj: dict, source: str, issue: dict) -> str:
     """Spawn satu issue-fix run dari issue ternormalisasi — jalur bersama
-    webhook (push) dan watchdog (poll), biar perilakunya identik."""
+    webhook (push) dan watchdog (poll), biar perilakunya identik.
+
+    Project boleh nunjuk task registry sendiri (`task: <id>` di triggers.projects):
+    payload-nya = issue ternormalisasi + source. Tanpa itu, dipakai pipeline
+    issue-fix bawaan (repro-first) di bawah — tetap dicatat `task_id=issue-fix`
+    biar kekelompok di dashboard.
+    """
+    payload = {"source": source, **issue}
+    if proj.get("task"):
+        out = tasks.trigger(
+            store, cfg, proj["task"], payload,
+            idempotency_key=issue["fingerprint"],
+            overrides={k: proj.get(k) for k in tasks.OVERRIDABLE},
+        )
+        return out["run_id"]
+
     verify_cmd = proj["verify_cmd"]
     rpath = None
     if proj.get("repro", True):
@@ -102,6 +120,8 @@ def create_issue_run(store, cfg: dict, proj: dict, source: str, issue: dict) -> 
         context_cmd=proj.get("context_cmd"),
         gate_prompt=proj.get("gate_prompt"),
         on_success_cmd=proj.get("on_success_cmd"),
+        task_id=ISSUE_TASK,
+        payload=payload,
     )
 
 

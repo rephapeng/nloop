@@ -3,28 +3,20 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>nloop</title>
+  <title>nloop — runs</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔁</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
 </head>
-<body data-page="index">
+<body data-page="index" data-nav="runs">
 
-  <header class="topbar">
-    <div class="topbar-inner">
-      <a class="brand" href="/">
-        <span class="logo">∞</span> nloop <span class="sub">loop engineering</span>
-      </a>
+  <aside class="sidebar" id="sidebar"></aside>
+
+  <main class="content">
+    <header class="page-head">
+      <h1>Runs<span class="count" id="count"></span></h1>
       <span class="spacer"></span>
-      <div class="stats" id="stats"></div>
-    </div>
-  </header>
-
-  <main class="wrap">
-
-    <div class="toolbar">
-      <h2 class="sect" style="margin:0;flex:1">Loops</h2>
       <button class="primary" id="toggle-form" type="button">＋ New loop</button>
-    </div>
+    </header>
 
     <form id="new-loop" class="card" hidden>
       <div class="grid">
@@ -34,18 +26,18 @@
         <label class="field">Verify command <span class="hint">— exit 0 = done</span>
           <input name="verify_cmd" required placeholder="pytest -q" class="mono">
         </label>
-        <label class="field">Workdir <span class="hint">— empty = auto</span>
+        <label class="field">Workdir <span class="hint">— kosong = auto</span>
           <input name="workdir" placeholder="/path/to/repo" class="mono">
         </label>
       </div>
       <details class="advanced">
-        <summary>Advanced options — role, grounding, quality gate, limits</summary>
+        <summary>Advanced — role, grounding, quality gate, limit</summary>
         <div class="grid">
           <label class="field">Role <span class="hint">— roles/&lt;name&gt;.md</span>
             <input name="role" placeholder="writer">
           </label>
           <label class="field">Model
-            <input name="model" placeholder="default from config">
+            <input name="model" placeholder="default dari config">
           </label>
           <label class="field">Max iterations
             <input name="max_iterations" type="number" min="1" placeholder="10">
@@ -53,34 +45,39 @@
           <label class="field">Max cost (USD)
             <input name="max_cost_usd" type="number" step="0.5" min="0.5" placeholder="5.0">
           </label>
-          <label class="field full">Context command <span class="hint">— fresh grounding every iteration, stdout injected into the system prompt</span>
+          <label class="field full">Context command <span class="hint">— grounding segar tiap iterasi</span>
             <input name="context_cmd" placeholder="python3 tools/build_knowledge.py --stdout" class="mono">
           </label>
-          <label class="field full">Gate prompt <span class="hint">— LLM quality gate criteria after the verifier passes (empty = no gate)</span>
-            <textarea name="gate_prompt" rows="2" placeholder="Output must be >= 1000 words, original, all internal links valid."></textarea>
+          <label class="field full">Gate prompt <span class="hint">— kriteria quality gate setelah verifier lolos (kosong = tanpa gate)</span>
+            <textarea name="gate_prompt" rows="2" placeholder="Minimal 1000 kata, orisinal, semua internal link valid."></textarea>
           </label>
         </div>
       </details>
-      <div style="display:flex;align-items:center">
+      <div class="form-actions">
         <button class="primary" type="submit">Run loop</button>
         <span id="form-error" class="form-error"></span>
       </div>
+      <p class="faint form-note">Butuh yang bisa dipanggil ulang dengan input beda?
+        Bikin task di <a href="/tasks">Tasks</a>.</p>
     </form>
 
-    <div id="runs" class="runs"><div class="empty">loading…</div></div>
+    <div class="filters" id="filters"></div>
 
-    <section id="schedules-section" hidden>
-      <h2 class="sect">Schedules</h2>
-      <div id="schedules" class="sched-list"></div>
-    </section>
-
-    <section id="watchdog-section">
-      <h2 class="sect">Sentry watchdog</h2>
-      <div id="watchdog" class="sched-list"></div>
-    </section>
-
+    <div class="table-wrap card">
+      <table class="tbl">
+        <thead>
+          <tr>
+            <th>Status</th><th>Run</th><th>Task</th><th class="num">Iterasi</th>
+            <th class="num">Cost</th><th class="num">Durasi</th>
+            <th class="num">Mulai</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="runs"><tr><td colspan="8"><div class="empty">loading…</div></td></tr></tbody>
+      </table>
+    </div>
   </main>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/common.js"></script>
+  <script src="/static/runs.js"></script>
 </body>
 </html>
