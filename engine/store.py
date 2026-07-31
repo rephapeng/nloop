@@ -88,13 +88,25 @@ class Store:
         # Fase 9 (port dtc-agent): role prompt, grounding cmd, LLM gate.
         # on_success_cmd: langkah rilis setelah fix terverifikasi (push+deploy).
         # Fase 10: task_id + payload (run = instansi task, bukan barang sekali pakai).
+        # Fase 13: workspace — tenant pemilik run. Run lama NULL sampai diadopsi
+        # workspace primary (lihat adopt_orphan_runs).
         for col in ("role", "context_cmd", "gate_prompt", "on_success_cmd",
-                    "task_id", "payload"):
+                    "task_id", "payload", "workspace"):
             if col not in cols:
                 self.db.execute(f"ALTER TABLE runs ADD COLUMN {col} TEXT")
         # index nyusul ALTER — DB lama belum punya kolomnya waktu SCHEMA jalan
         self.db.execute(
             "CREATE INDEX IF NOT EXISTS idx_runs_task ON runs(task_id, created_at)")
+        self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_runs_ws ON runs(workspace, created_at)")
+
+    def adopt_orphan_runs(self, workspace: str) -> int:
+        """Run pre-workspace (kolomnya NULL) dikasih ke workspace primary — biar
+        histori lama nggak ilang dari dashboard begitu workspace dinyalain."""
+        cur = self.db.execute(
+            "UPDATE runs SET workspace=? WHERE workspace IS NULL", (workspace,))
+        self.db.commit()
+        return cur.rowcount
 
     # ---- runs ----
 
@@ -114,45 +126,74 @@ class Store:
         on_success_cmd: str | None = None,
         task_id: str | None = None,
         payload: dict | None = None,
+        workspace: str | None = None,
     ) -> str:
         run_id = uuid.uuid4().hex[:12]
         self.db.execute(
             "INSERT INTO runs(id, goal, verify_cmd, workdir, model,"
             " max_iterations, max_cost_usd, fingerprint, role, context_cmd,"
-            " gate_prompt, on_success_cmd, task_id, payload, created_at)"
-            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " gate_prompt, on_success_cmd, task_id, payload, workspace, created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (run_id, goal, verify_cmd, workdir, model,
              max_iterations, max_cost_usd, fingerprint, role, context_cmd,
              gate_prompt, on_success_cmd, task_id,
              json.dumps(payload, ensure_ascii=False) if payload else None,
-             time.time()),
+             workspace, time.time()),
         )
         self.db.commit()
         return run_id
 
-    def find_active_by_fingerprint(self, fingerprint: str) -> str | None:
+    @staticmethod
+    def _ws_clause(workspace: str | None) -> tuple[str, tuple]:
+        """Filter workspace buat lookup fingerprint. None = lintas workspace
+        (dipakai jalur lama/test); isi = dedup cuma di dalam tenant itu, jadi dua
+        workspace boleh punya schedule/issue dengan fingerprint sama."""
+        return (" AND workspace=?", (workspace,)) if workspace else ("", ())
+
+    def find_active_by_fingerprint(self, fingerprint: str,
+                                   workspace: str | None = None) -> str | None:
         """Dedup trigger: run aktif (queued/running) dengan fingerprint sama."""
+        clause, params = self._ws_clause(workspace)
         row = self.db.execute(
             "SELECT id FROM runs WHERE fingerprint=? AND status IN ('queued','running')"
-            " LIMIT 1",
-            (fingerprint,),
+            f"{clause} LIMIT 1",
+            (fingerprint, *params),
         ).fetchone()
         return row["id"] if row else None
 
-    def last_run_for_fingerprint(self, fingerprint: str) -> dict | None:
+    def last_run_for_fingerprint(self, fingerprint: str,
+                                 workspace: str | None = None) -> dict | None:
         """Run terakhir (status apa pun) buat fingerprint — dipakai cooldown watchdog."""
+        clause, params = self._ws_clause(workspace)
         row = self.db.execute(
-            "SELECT * FROM runs WHERE fingerprint=? ORDER BY created_at DESC LIMIT 1",
-            (fingerprint,),
+            f"SELECT * FROM runs WHERE fingerprint=?{clause}"
+            " ORDER BY created_at DESC LIMIT 1",
+            (fingerprint, *params),
         ).fetchone()
         return _run_row(row)
+
+    def last_runs_for_fingerprint(self, fingerprint: str, limit: int,
+                                  workspace: str | None = None) -> list[dict]:
+        """`limit` run terakhir (status apa pun) buat fingerprint, urutan KRONOLOGIS
+        (lawas -> baru) — dipakai dashboard nampilin step tick schedule terakhir
+        sebagai alur. Best-effort: kalau ada step yang di-skip (step sebelumnya
+        gagal & bukan `always:true`), step itu memang nggak pernah jadi row run,
+        jadi jumlah chip bisa lebih sedikit dari jumlah step di config — itu
+        akurat, bukan bug."""
+        clause, params = self._ws_clause(workspace)
+        rows = self.db.execute(
+            f"SELECT * FROM runs WHERE fingerprint=?{clause}"
+            " ORDER BY created_at DESC LIMIT ?",
+            (fingerprint, *params, limit),
+        ).fetchall()
+        return [_run_row(r) for r in reversed(rows)]
 
     def get_run(self, run_id: str) -> dict | None:
         row = self.db.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
         return _run_row(row)
 
     def list_runs(self, *, task_id: str | None = None, status: str | None = None,
-                  limit: int | None = None) -> list[dict]:
+                  limit: int | None = None, workspace: str | None = None) -> list[dict]:
         sql = "SELECT * FROM runs"
         where, params = [], []
         if task_id:
@@ -161,6 +202,9 @@ class Store:
         if status:
             where.append("status=?")
             params.append(status)
+        if workspace:
+            where.append("workspace=?")
+            params.append(workspace)
         if where:
             sql += " WHERE " + " AND ".join(where)
         sql += " ORDER BY created_at DESC"
@@ -169,12 +213,14 @@ class Store:
             params.append(limit)
         return [_run_row(r) for r in self.db.execute(sql, params).fetchall()]
 
-    def task_ids(self) -> list[dict]:
+    def task_ids(self, workspace: str | None = None) -> list[dict]:
         """task_id yang pernah jalan + jumlah run. Dipakai dashboard buat nampilin
         task bawaan (mis. issue-fix) yang nggak kedaftar di registry config."""
+        clause, params = self._ws_clause(workspace)
         rows = self.db.execute(
             "SELECT task_id, COUNT(*) AS runs, MAX(created_at) AS last_at FROM runs"
-            " WHERE task_id IS NOT NULL GROUP BY task_id ORDER BY last_at DESC"
+            f" WHERE task_id IS NOT NULL{clause}"
+            " GROUP BY task_id ORDER BY last_at DESC", params
         ).fetchall()
         return [dict(r) for r in rows]
 

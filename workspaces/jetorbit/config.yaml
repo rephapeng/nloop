@@ -1,0 +1,41 @@
+# Workspace jetorbit — masih kosong, isinya bakal disuruh bikin lewat bot.
+#
+# Yang perlu diisi sebelum ini berguna:
+#   1. .env  ->  TELEGRAM_BOT_TOKEN_JETORBIT + TELEGRAM_ALLOWED_CHAT_IDS_JETORBIT
+#      (bot SENDIRI dari BotFather — token Telegram nggak bisa dishare antar
+#      workspace, dua long-poll dengan token sama = 409 Conflict)
+#   2. telegram.agent_workdir  ->  path project jetorbit yang beneran
+#   3. triggers.projects / watchdog kalau mau auto-fix dari Sentry
+label: Jetorbit
+
+# Chat bebas ke bot ini jalan sebagai session Claude Code di agent_workdir.
+# Dari situ bot bisa bikin loop sendiri (task/schedule) buat workspace ini.
+telegram:
+  enabled: true
+  notify: true
+  agent_workdir: workspaces/jetorbit/work   # TODO: ganti ke path project jetorbit
+  model: null
+  model_smalltalk: sonnet
+  thinking_tokens: 10000
+  cmd_timeout_sec: 900
+  max_turns: null
+  progress_interval_sec: 60
+
+# Belum ada kerjaan tetap — task/schedule diisi belakangan (boleh lewat file
+# workspaces/jetorbit/tasks/<id>.yaml biar nggak numpuk di sini).
+tasks: {}
+schedules: {}
+
+# Webhook issue-fix: POST /api/hooks/sentry?workspace=jetorbit&project=<nama>&token=<token>
+triggers:
+  token: null
+  projects: {}
+
+watchdog:
+  enabled: false
+  organization: null
+  projects: {}
+
+# Laporan promo itu punya onecookie — jangan ikut nyala di sini.
+promo_report:
+  enabled: false

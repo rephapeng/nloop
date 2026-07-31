@@ -60,6 +60,7 @@ class Scheduler:
     def __init__(self, store, cfg: dict):
         self.store = store
         self.cfg = cfg
+        self.workspace = cfg.get("workspace")
         self.poll = cfg.get("loops", {}).get("poll_interval_sec", 1.0)
         self._stopping = asyncio.Event()
 
@@ -104,7 +105,8 @@ class Scheduler:
             delay = next_delay(spec, time.time())
             if not await self._sleep(delay):
                 return
-            if self.store.find_active_by_fingerprint(f"schedule:{name}"):
+            if self.store.find_active_by_fingerprint(f"schedule:{name}",
+                                                     workspace=self.workspace):
                 log.warning("schedule '%s': tick sebelumnya masih aktif — skip", name)
                 continue
             try:
@@ -137,6 +139,8 @@ class Scheduler:
 
         Fingerprint tetap `schedule:<nama>` (bukan idempotency key task-nya) —
         dedup schedule yang berlaku: tick baru nggak numpuk di atas pipeline lama.
+        Fingerprint-nya nggak di-prefix workspace: semua lookup-nya emang udah
+        di-scope per workspace di store, jadi nama schedule boleh kembar antar tenant.
         """
         loops_cfg = self.cfg["loops"]
         fingerprint = f"schedule:{name}"
@@ -158,6 +162,7 @@ class Scheduler:
             role=step.get("role"),
             context_cmd=step.get("context_cmd"),
             gate_prompt=step.get("gate_prompt"),
+            workspace=self.workspace,
         )
 
     @staticmethod

@@ -79,7 +79,7 @@ def bot(monkeypatch, tmp_path):
     monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "1")
     monkeypatch.chdir(tmp_path)                    # .sessions/ dst. jangan nyampah
     cfg = config.load("/nonexistent")
-    cfg["paths"]["workspaces"] = str(tmp_path / "ws")
+    cfg["paths"]["scratch"] = str(tmp_path / "ws")
     (tmp_path / "ws").mkdir()
     store = Store(str(tmp_path / "t.db"))
     b = TelegramBot(cfg, store)

@@ -95,3 +95,22 @@ def test_list_runs_newest_first(tmp_path):
     b = s.create_run("newer", "exit 0", "/ws")
     ids = [r["id"] for r in s.list_runs()]
     assert ids.index(b) < ids.index(a)
+
+
+def test_last_runs_for_fingerprint_chronological(tmp_path):
+    s = make_store(tmp_path)
+    fp = "schedule:promo-pagi"
+    step1 = s.create_run("tulis draft", "exit 0", "/ws", fingerprint=fp)
+    step2 = s.create_run("crosspost", "exit 0", "/ws", fingerprint=fp)
+    other = s.create_run("nggak nyambung", "exit 0", "/ws", fingerprint="schedule:lain")
+    got = s.last_runs_for_fingerprint(fp, limit=2)
+    assert [r["id"] for r in got] == [step1, step2]
+    assert other not in [r["id"] for r in got]
+
+
+def test_last_runs_for_fingerprint_respects_limit(tmp_path):
+    s = make_store(tmp_path)
+    fp = "schedule:x"
+    ids = [s.create_run(f"step {i}", "exit 0", "/ws", fingerprint=fp) for i in range(5)]
+    got = s.last_runs_for_fingerprint(fp, limit=2)
+    assert [r["id"] for r in got] == ids[-2:]

@@ -23,7 +23,8 @@ def client(monkeypatch, tmp_path):
 
     cfg = config.load("/nonexistent")
     cfg["paths"]["db"] = str(tmp_path / "api.db")
-    cfg["paths"]["workspaces"] = str(tmp_path / "ws")
+    cfg["paths"]["workspaces"] = str(tmp_path / "wscfg")
+    cfg["paths"]["scratch"] = str(tmp_path / "ws")
     cfg["loops"]["poll_interval_sec"] = 0.02
     with TestClient(create_app(cfg)) as c:
         yield c
@@ -137,7 +138,8 @@ def client_sched(monkeypatch, tmp_path):
     ws.mkdir()
     cfg = config.load("/nonexistent")
     cfg["paths"]["db"] = str(tmp_path / "api.db")
-    cfg["paths"]["workspaces"] = str(ws)
+    cfg["paths"]["workspaces"] = str(tmp_path / "wscfg")
+    cfg["paths"]["scratch"] = str(ws)
     cfg["loops"]["poll_interval_sec"] = 0.02
     cfg["schedules"] = {"pipa": {"at": "23:59", "steps": [
         {"goal": "step-a", "verify_cmd": "exit 0", "workdir": str(ws)},
@@ -164,6 +166,11 @@ def test_schedule_listed_and_manual_trigger_runs_pipeline(client_sched):
     assert sorted(x["goal"] for x in done) == ["step-a", "step-b"]
     assert all(x["fingerprint"] == "schedule:pipa" for x in done)
 
+    # last_tick: alur step tick terakhir, urutan kronologis, buat dashboard.
+    tick = client_sched.get("/api/schedules").json()["pipa"]["last_tick"]
+    assert [step["label"] for step in tick] == ["step-a", "step-b"]
+    assert all(step["status"] == "succeeded" for step in tick)
+
 
 @pytest.fixture
 def client_tasks(monkeypatch, tmp_path):
@@ -178,7 +185,8 @@ def client_tasks(monkeypatch, tmp_path):
     ws.mkdir()
     cfg = config.load("/nonexistent")
     cfg["paths"]["db"] = str(tmp_path / "api.db")
-    cfg["paths"]["workspaces"] = str(ws)
+    cfg["paths"]["workspaces"] = str(tmp_path / "wscfg")
+    cfg["paths"]["scratch"] = str(ws)
     cfg["paths"]["tasks"] = str(tmp_path / "tasks-kosong")
     cfg["loops"]["poll_interval_sec"] = 0.02
     cfg["tasks"] = {"buat-file": {

@@ -25,7 +25,7 @@ import uuid
 
 import httpx
 
-from engine import claude_cli, grounding
+from engine import claude_cli, config, grounding
 
 log = logging.getLogger("nloop.telegram")
 
@@ -224,28 +224,49 @@ def forward_context(msg: dict) -> str:
 
 # ---- bot -----------------------------------------------------------------------
 
+def env_names(tg_cfg: dict, workspace: str | None,
+              primary: bool = False) -> tuple[str, str]:
+    """Nama env var token + allow-list buat satu workspace.
+
+    Satu bot per workspace: token Telegram NGGAK BISA di-share (dua getUpdates
+    dengan token sama = 409 Conflict dari Telegram). Workspace primary tetap
+    pakai nama lama (TELEGRAM_BOT_TOKEN) biar setup yang udah jalan nggak perlu
+    diubah; workspace lain dapat suffix, mis. TELEGRAM_BOT_TOKEN_JETORBIT.
+    Sengaja NGGAK ada fallback ke nama polos — dua workspace diam-diam pakai
+    token sama bakal saling nyolong update.
+    Bisa di-override eksplisit lewat `telegram.token_env` / `telegram.allowed_env`.
+    """
+    suffix = "" if (primary or not workspace) else f"_{workspace.upper().replace('-', '_')}"
+    token_env = tg_cfg.get("token_env") or f"TELEGRAM_BOT_TOKEN{suffix}"
+    allowed_env = tg_cfg.get("allowed_env") or f"TELEGRAM_ALLOWED_CHAT_IDS{suffix}"
+    return token_env, allowed_env
+
+
+def parse_chat_ids(raw: str) -> set[int]:
+    out = set()
+    for x in (raw or "").replace(";", ",").split(","):
+        x = x.strip()
+        if x.lstrip("-").isdigit():
+            out.add(int(x))
+    return out
+
+
 class TelegramBot:
     def __init__(self, cfg: dict, store, scheduler=None):
         self.cfg = cfg
         self.tg_cfg = cfg.get("telegram", {})
         self.store = store
         self.scheduler = scheduler
-        self.token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+        self.workspace = cfg.get("workspace")
+        self.token_env, self.allowed_env = env_names(
+            self.tg_cfg, self.workspace, primary=bool(cfg.get("is_primary")))
+        self.token = os.environ.get(self.token_env, "").strip()
         self.api = f"https://api.telegram.org/bot{self.token}"
-        self.allowed = self._parse_allowed()
+        self.allowed = parse_chat_ids(os.environ.get(self.allowed_env, ""))
         self.offset: int | None = None
         self.busy = asyncio.Lock()          # satu agent-chat berat pada satu waktu
         self.http = httpx.AsyncClient(timeout=POLL_TIMEOUT + 15)
         self._stopping = asyncio.Event()
-
-    @staticmethod
-    def _parse_allowed() -> set[int]:
-        out = set()
-        for x in os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS", "").replace(";", ",").split(","):
-            x = x.strip()
-            if x.lstrip("-").isdigit():
-                out.add(int(x))
-        return out
 
     def authorized(self, chat_id: int) -> bool:
         return chat_id in self.allowed      # fails closed
@@ -316,8 +337,11 @@ class TelegramBot:
     # ---- chat agent (session per-chat, pola agent_run.sh) ----
 
     def _sid_path(self, chat_id: int) -> str:
-        os.makedirs(SESSIONS_DIR, exist_ok=True)
-        return os.path.join(SESSIONS_DIR, f"{chat_id}.sid")
+        """Session dipisah per workspace: chat id yang sama ngobrol ke dua bot
+        beda nggak boleh nyampur konteks (workdir & rolenya beda)."""
+        d = os.path.join(SESSIONS_DIR, self.workspace) if self.workspace else SESSIONS_DIR
+        os.makedirs(d, exist_ok=True)
+        return os.path.join(d, f"{chat_id}.sid")
 
     def reset_session(self, chat_id: int) -> None:
         try:
@@ -522,12 +546,17 @@ class TelegramBot:
         await self.send(
             chat_id,
             f"🚫 Not authorized. Your chat ID is <code>{chat_id}</code> — "
-            "add it to TELEGRAM_ALLOWED_CHAT_IDS in .env and restart nloop.")
+            f"add it to <code>{self.allowed_env}</code> in .env and restart nloop.")
         log.warning("denied chat_id=%s: %s", chat_id, text[:60])
         return False
 
+    def _my_runs(self, limit: int | None = None) -> list[dict]:
+        """Bot cuma lihat run workspace-nya sendiri — tenant lain bukan urusannya."""
+        return self.store.list_runs(workspace=self.workspace, limit=limit)
+
     async def _cmd_stop(self, chat_id: int, run_id: str) -> None:
-        if not run_id or self.store.get_run(run_id) is None:
+        run = self.store.get_run(run_id) if run_id else None
+        if run is None or (self.workspace and run.get("workspace") != self.workspace):
             await self.send(chat_id, "Pakai: /stop <run_id> (lihat /loops)")
             return
         self.store.request_stop(run_id)
@@ -544,7 +573,7 @@ class TelegramBot:
         goal, verify_cmd = parts[0], parts[1]
         workdir = parts[2] if len(parts) > 2 and parts[2] else None
         if workdir is None:
-            workdir = os.path.join(self.cfg["paths"]["workspaces"], uuid.uuid4().hex[:8])
+            workdir = os.path.join(config.scratch_dir(self.cfg), uuid.uuid4().hex[:8])
             os.makedirs(workdir, exist_ok=True)
         elif not os.path.isdir(workdir):
             await self.send(chat_id, f"❌ workdir tidak ada: {workdir}")
@@ -555,12 +584,13 @@ class TelegramBot:
             model=self.cfg["claude"].get("model"),
             max_iterations=loops_cfg["max_iterations"],
             max_cost_usd=loops_cfg["max_cost_usd"],
+            workspace=self.workspace,
         )
         await self.send(chat_id, f"🚀 loop <code>{run_id}</code> antri.\n"
                                  f"goal: {html.escape(goal)}\nworkdir: <code>{workdir}</code>")
 
     def loops_text(self) -> str:
-        runs = self.store.list_runs()[:8]
+        runs = self._my_runs(limit=8)
         if not runs:
             return "belum ada run."
         lines = []
@@ -573,20 +603,24 @@ class TelegramBot:
         return "\n".join(lines)
 
     def status_text(self) -> str:
-        runs = self.store.list_runs()
+        runs = self._my_runs()
         counts: dict[str, int] = {}
         for r in runs:
             counts[r["status"]] = counts.get(r["status"], 0) + 1
         parts = [f"{s}: {n}" for s, n in sorted(counts.items())] or ["kosong"]
         scheds = ", ".join((self.cfg.get("schedules") or {}).keys()) or "—"
-        return (f"🧮 runs — {' · '.join(parts)}\n"
+        tasks_ = ", ".join((self.cfg.get("tasks") or {}).keys()) or "—"
+        return (f"🗂 workspace: <b>{self.workspace or '—'}</b>\n"
+                f"🧮 runs — {' · '.join(parts)}\n"
                 f"🗓 schedules: {scheds}\n"
+                f"⚡ tasks: {tasks_}\n"
                 f"👥 allow-list: {len(self.allowed)} chat")
 
     def help_text(self, chat_id: int) -> str:
         auth = "✅" if self.authorized(chat_id) else "🚫 belum diizinin"
         return (
-            "<b>nloop</b> — loop engine. Langsung chat aja buat nyuruh agent, "
+            f"<b>nloop</b> — loop engine, workspace <b>{self.workspace or '—'}</b>. "
+            "Langsung chat aja buat nyuruh agent, "
             f"atau pakai command. ({auth})\n\n"
             "• /loops — daftar run terakhir\n"
             "• /new goal | verify_cmd [| workdir] — antri loop baru\n"
@@ -599,7 +633,8 @@ class TelegramBot:
     # ---- main loop ----
 
     async def run_forever(self) -> None:
-        log.info("telegram bot up; allow-list=%s",
+        log.info("telegram bot up [ws=%s, token=%s]; allow-list=%s",
+                 self.workspace, self.token_env,
                  sorted(self.allowed) or "EMPTY (onboarding only)")
         while not self._stopping.is_set():
             try:

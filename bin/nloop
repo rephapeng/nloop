@@ -10,8 +10,10 @@
   nloop schedules                               daftar schedule + status
   nloop trigger <schedule>                      jalankan pipeline schedule sekarang
   nloop ask "<pertanyaan>" [--role X]           Q&A one-shot (read-only, tanpa server)
+  nloop ws                                      daftar workspace (tenant)
 
 Server dibaca dari config.yaml (section server). Override: NLOOP_URL.
+Workspace: NLOOP_WORKSPACE=jetorbit nloop ls  (kosong = workspace primary).
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,6 +40,11 @@ def base_url() -> str:
 
 
 def api(method: str, path: str, body: dict | None = None):
+    # Semua request di-scope ke workspace kalau NLOOP_WORKSPACE diset; kosong =
+    # workspace primary (perilaku lama).
+    ws = os.environ.get("NLOOP_WORKSPACE", "").strip()
+    if ws and path.startswith("/api/"):
+        path += ("&" if "?" in path else "?") + "workspace=" + urllib.parse.quote(ws)
     req = urllib.request.Request(
         base_url() + path, method=method,
         data=json.dumps(body).encode() if body is not None else None,
@@ -179,6 +187,17 @@ def cmd_ask(args: list[str]) -> None:
     asyncio.run(main())
 
 
+def cmd_ws(_args: list[str]) -> None:
+    """Daftar workspace. Pilih pakai env: NLOOP_WORKSPACE=jetorbit nloop ls"""
+    body = api("GET", "/api/workspaces")
+    active = os.environ.get("NLOOP_WORKSPACE", "").strip() or body["primary"]
+    for w in body["workspaces"]:
+        mark = "*" if w["name"] == active else " "
+        tail = f"  {w['active']} aktif" if w.get("active") else ""
+        print(f"{mark} {w['name']:<16} {w['tasks']} task · {w['schedules']} schedule"
+              f" · {len(w['projects'])} project{tail}")
+
+
 def die(msg: str) -> None:
     print(msg, file=sys.stderr)
     sys.exit(2)
@@ -186,7 +205,7 @@ def die(msg: str) -> None:
 
 COMMANDS = {"new": cmd_new, "ls": cmd_ls, "show": cmd_show, "stop": cmd_stop,
             "schedules": cmd_schedules, "trigger": cmd_trigger, "ask": cmd_ask,
-            "tasks": cmd_tasks, "run": cmd_run}
+            "tasks": cmd_tasks, "run": cmd_run, "ws": cmd_ws}
 
 
 def main() -> None:

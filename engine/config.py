@@ -67,9 +67,20 @@ DEFAULTS = {
         "days": 7,                       # window agregat/tren/breakdown (Hari ini & Kemarin selalu ada)
         "send_on_start": False,          # kirim sekali pas server nyala, jangan nunggu jadwal
     },
-    "paths": {"db": "nloop.db", "workspaces": "workspaces", "roles": "roles",
-              "tasks": "tasks"},
+    # workspaces: direktori config tenant (workspaces/<nama>/config.yaml — lihat
+    # engine/workspaces.py). scratch: workdir sekali pakai buat run yang nggak
+    # bawa workdir sendiri — DULU ini artinya `paths.workspaces`, dipisah waktu
+    # workspace jadi konsep tenant.
+    "paths": {"db": "nloop.db", "workspaces": "workspaces", "scratch": ".scratch",
+              "roles": "roles", "tasks": "tasks"},
 }
+
+
+def scratch_dir(cfg: dict) -> str:
+    """Direktori workdir sekali pakai. Config lama yang masih nulis
+    `paths.workspaces` doang tetap kebaca lewat fallback di bawah."""
+    paths = cfg.get("paths") or {}
+    return paths.get("scratch") or paths.get("workspaces") or ".scratch"
 
 
 def load(path: str = "config.yaml") -> dict:

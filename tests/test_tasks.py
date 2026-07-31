@@ -18,7 +18,7 @@ TASK = {
 @pytest.fixture
 def cfg(tmp_path):
     c = config.load("/nonexistent")
-    c["paths"]["workspaces"] = str(tmp_path / "ws")
+    c["paths"]["scratch"] = str(tmp_path / "ws")
     c["tasks"] = {"promo-post": dict(TASK, workdir=str(tmp_path))}
     return c
 

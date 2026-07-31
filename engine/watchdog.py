@@ -61,6 +61,7 @@ class Watchdog:
                  transport: httpx.AsyncBaseTransport | None = None):
         self.store = store
         self.cfg = cfg
+        self.workspace = cfg.get("workspace")
         self.wcfg = cfg.get("watchdog", {})
         self.transport = transport   # injeksi buat test (MockTransport)
         self._stopping = asyncio.Event()
@@ -78,6 +79,7 @@ class Watchdog:
         default_interval = w.get("interval", "5m")
         proj_map = w.get("projects") or {}
         return {
+            "workspace": self.workspace,
             "enabled": bool(w.get("enabled")),
             "interval": default_interval,
             "cooldown": w.get("cooldown", "24h"),
@@ -224,9 +226,9 @@ class Watchdog:
                 break
             issue = self._normalize(it)
             fp = issue["fingerprint"]
-            if self.store.find_active_by_fingerprint(fp):
+            if self.store.find_active_by_fingerprint(fp, workspace=self.workspace):
                 continue                                   # masih dikerjain
-            last = self.store.last_run_for_fingerprint(fp)
+            last = self.store.last_run_for_fingerprint(fp, workspace=self.workspace)
             if last:
                 ref = last["ended_at"] or last["created_at"] or 0
                 if time.time() - ref < cooldown:

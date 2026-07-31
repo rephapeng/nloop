@@ -116,7 +116,7 @@ def client(monkeypatch, tmp_path, project_dir):
 
     cfg = config.load("/nonexistent")
     cfg["paths"]["db"] = str(tmp_path / "trig.db")
-    cfg["paths"]["workspaces"] = str(tmp_path / "ws")
+    cfg["paths"]["scratch"] = str(tmp_path / "ws")
     cfg["loops"]["poll_interval_sec"] = 0.02
     cfg["triggers"] = {
         "token": "rahasia",
@@ -215,7 +215,7 @@ def test_project_boleh_nunjuk_task_registry(monkeypatch, tmp_path, project_dir):
     monkeypatch.setattr(loop.claude_cli, "run", fake_run)
     cfg = config.load("/nonexistent")
     cfg["paths"]["db"] = str(tmp_path / "trig2.db")
-    cfg["paths"]["workspaces"] = str(tmp_path / "ws2")
+    cfg["paths"]["scratch"] = str(tmp_path / "ws2")
     cfg["paths"]["tasks"] = str(tmp_path / "tasks-kosong")
     cfg["loops"]["poll_interval_sec"] = 0.02
     cfg["tasks"] = {"triase": {

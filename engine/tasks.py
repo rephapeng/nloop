@@ -34,6 +34,8 @@ import uuid
 
 import yaml
 
+from engine import config
+
 log = logging.getLogger("nloop.tasks")
 
 # Field task yang isinya di-render dari payload.
@@ -223,9 +225,12 @@ def trigger(store, cfg: dict, task_id: str, payload: dict | None = None, *,
     spec = resolve(cfg, task_id, payload, overrides)
     key = idempotency_key or spec.pop("idempotency_key", None)
     spec.pop("idempotency_key", None)
+    workspace = cfg.get("workspace")
 
     if key:
-        existing = store.find_active_by_fingerprint(key)
+        # dedup di dalam workspace-nya sendiri — task bernama sama di tenant lain
+        # bukan urusan kita
+        existing = store.find_active_by_fingerprint(key, workspace=workspace)
         if existing:
             return {"run_id": existing, "task": task_id, "deduped": True,
                     "idempotency_key": key}
@@ -236,7 +241,7 @@ def trigger(store, cfg: dict, task_id: str, payload: dict | None = None, *,
 
     run_id = store.create_run(
         spec.pop("goal"), spec.pop("verify_cmd"), workdir,
-        fingerprint=key, **spec,
+        fingerprint=key, workspace=workspace, **spec,
     )
     log.info("task '%s' → run %s", task_id, run_id)
     return {"run_id": run_id, "task": task_id, "deduped": False,
@@ -244,8 +249,7 @@ def trigger(store, cfg: dict, task_id: str, payload: dict | None = None, *,
 
 
 def _auto_workdir(cfg: dict) -> str:
-    """Task tanpa workdir → workspace sekali pakai (sama kayak POST /api/loops)."""
-    workdir = os.path.join(cfg.get("paths", {}).get("workspaces", "workspaces"),
-                           uuid.uuid4().hex[:8])
+    """Task tanpa workdir → direktori scratch sekali pakai (sama kayak POST /api/loops)."""
+    workdir = os.path.join(config.scratch_dir(cfg), uuid.uuid4().hex[:8])
     os.makedirs(workdir, exist_ok=True)
     return workdir

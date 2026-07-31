@@ -122,6 +122,7 @@ def create_issue_run(store, cfg: dict, proj: dict, source: str, issue: dict) -> 
         on_success_cmd=proj.get("on_success_cmd"),
         task_id=ISSUE_TASK,
         payload=payload,
+        workspace=cfg.get("workspace"),
     )
 
 
