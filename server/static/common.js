@@ -1,5 +1,5 @@
-// nloop dashboard — vanilla JS, tanpa build step.
-// File ini: helper + shell (sidebar) yang dipakai SEMUA halaman.
+// nloop dashboard — vanilla JS, no build step.
+// This file: helpers + the shell (sidebar) used by EVERY page.
 'use strict';
 
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -11,7 +11,7 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
 
 const fmtCost = (c) => '$' + (c || 0).toFixed(2);
 
-/** Durasi detik → "820ms" / "12.4s" / "3m20s" / "1h4m" (ringkas, tetap kebaca). */
+/** Seconds → "820ms" / "12.4s" / "3m20s" / "1h4m" (compact, still readable). */
 function fmtDur(sec) {
   if (sec === null || sec === undefined) return '';
   if (sec < 1) return Math.round(sec * 1000) + 'ms';
@@ -38,13 +38,13 @@ function runDuration(run) {
 const badge = (s) => `<span class="badge ${esc(s)}">${esc(s)}</span>`;
 
 // ---------- motion: scroll reveal ----------
-// IntersectionObserver polos, tanpa library. Elemen ber-class `reveal` mulai
-// transparan (lihat style.css, digate html.motion) dan dianimasiin begitu masuk
-// viewport. Aturan mainnya: animasi NGGAK BOLEH bikin konten ilang — kalau
-// observer nggak ada / reduced-motion / nggak pernah nembak, semua langsung tampil.
+// Plain IntersectionObserver, no library. Elements carrying `reveal` start out
+// transparent (see style.css, gated on html.motion) and animate in once they
+// enter the viewport. The rule: animation MUST NEVER hide content — with no
+// observer, reduced motion, or an observer that never fires, everything shows.
 
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const STAGGER_CAP = 12;          // item ke-13 dst. nggak usah nunggu makin lama
+const STAGGER_CAP = 12;          // item 13 onwards shouldn't wait any longer
 
 const revealObs = (!REDUCED && 'IntersectionObserver' in window)
   ? new IntersectionObserver((entries, obs) => {
@@ -58,7 +58,7 @@ const revealObs = (!REDUCED && 'IntersectionObserver' in window)
 
 let safetyTimer = null;
 
-/** Amati semua `.reveal` yang belum kebuka di dalam root. */
+/** Observe every `.reveal` inside root that hasn't opened yet. */
 function reveal(root = document) {
   const els = $$('.reveal:not(.in)', root);
   if (!revealObs) {
@@ -66,12 +66,12 @@ function reveal(root = document) {
     return;
   }
   els.forEach((el) => revealObs.observe(el));
-  clearTimeout(safetyTimer);      // jaring pengaman: apa pun yang kejadian, konten muncul
+  clearTimeout(safetyTimer);      // safety net: whatever happens, content shows up
   safetyTimer = setTimeout(
     () => $$('.reveal:not(.in)').forEach((el) => el.classList.add('in')), 1500);
 }
 
-/** Konten baru di-render → kasih .reveal + index stagger ke tiap anak, terus amati. */
+/** Freshly rendered content → tag each child with .reveal + a stagger index, then observe. */
 function revealChildren(container, sel = ':scope > *') {
   if (!container) return;
   $$(sel, container).forEach((el, i) => {
@@ -82,13 +82,13 @@ function revealChildren(container, sel = ':scope > *') {
 }
 
 // ---------- workspace ----------
-// Satu proses nloop nampung banyak workspace (tenant). Pilihannya disimpan di URL
-// (?ws=) biar link bisa di-share, DAN di localStorage biar nempel antar halaman.
+// One nloop process hosts many workspaces (tenants). The choice lives in the URL
+// (?ws=) so links stay shareable, AND in localStorage so it sticks across pages.
 let WS = new URLSearchParams(location.search).get('ws')
       || localStorage.getItem('nloop.ws') || '';
 let WORKSPACES = [];
 
-/** Tempel ?ws= ke link internal biar pindah halaman nggak balik ke workspace lain. */
+/** Append ?ws= to internal links so navigating doesn't drop you into another workspace. */
 function withWs(href) {
   if (!WS) return href;
   const u = new URL(href, location.origin);
@@ -96,7 +96,7 @@ function withWs(href) {
   return u.pathname + u.search;
 }
 
-/** Semua panggilan /api/ otomatis di-scope ke workspace aktif. */
+/** Every /api/ call is automatically scoped to the active workspace. */
 function apiUrl(path) {
   if (!WS || !path.startsWith('/api/')) return path;
   return path + (path.includes('?') ? '&' : '?') + 'workspace=' + encodeURIComponent(WS);
@@ -106,7 +106,7 @@ function setWs(name) {
   WS = name || '';
   if (WS) localStorage.setItem('nloop.ws', WS);
   else localStorage.removeItem('nloop.ws');
-  location.href = withWs(location.pathname);   // reload halaman ini di workspace baru
+  location.href = withWs(location.pathname);   // reload this page in the new workspace
 }
 
 async function api(path, opts) {
@@ -116,7 +116,7 @@ async function api(path, opts) {
     try {
       const body = await r.json();
       msg = body.detail || JSON.stringify(body);
-    } catch { /* body bukan JSON — pakai status code aja */ }
+    } catch { /* body isn't JSON — fall back to the status code */ }
     throw new Error(msg);
   }
   return r.json();
@@ -162,7 +162,7 @@ function renderShell() {
   setInterval(pollShell, 5000);
 }
 
-/** Switcher workspace. Satu workspace doang → label diam aja (nggak usah dropdown). */
+/** Workspace switcher. Only one workspace → a plain label (no dropdown needed). */
 async function renderWorkspaces() {
   const el = $('#ws-switch');
   if (!el) return;
@@ -170,7 +170,7 @@ async function renderWorkspaces() {
   try {
     data = await api('/api/workspaces');
   } catch {
-    return;                       // server lama tanpa endpoint ini — sidebar tetap jalan
+    return;                       // older server without this endpoint — sidebar still works
   }
   WORKSPACES = data.workspaces || [];
   if (!WS) WS = data.primary || '';
@@ -206,7 +206,7 @@ async function pollShell() {
   }
 }
 
-/** Panel error kecil di atas konten — dipakai semua halaman biar konsisten. */
+/** Small error panel above the content — used by every page for consistency. */
 function showError(msg) {
   let el = $('#page-error');
   if (!el) {
@@ -220,4 +220,4 @@ function showError(msg) {
 }
 
 renderShell();
-reveal();                        // section statis yang udah nulis class="reveal" di HTML
+reveal();                        // static sections that declared class="reveal" in the HTML

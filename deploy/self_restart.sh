@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# self_restart.sh — restart service nloop sambil kasih kabar di Telegram
-# sebelum/sesudah, TANPA notifikasinya ikut mati bareng restart (port pola dtc).
+# self_restart.sh — restart the nloop service while pinging Telegram before and
+# after, WITHOUT the notification dying along with the restart (ported from dtc).
 #
-# Kenapa: kalau agent (chat Telegram nloop) restart service-nya sendiri dari
-# dalam, systemd matiin seluruh cgroup — termasuk proses yang mau ngirim balasan.
-# Jadi script ini HARUS dijalankan via systemd-run (transient unit di LUAR cgroup):
+# Why: if the agent (the nloop Telegram chat) restarts its own service from the
+# inside, systemd kills the entire cgroup — including the process that was about to
+# send the reply. So this script MUST be run via systemd-run (a transient unit OUTSIDE the cgroup):
 #
 #   systemd-run --unit=nloop-self-restart /opt/nloop/deploy/self_restart.sh
 #
@@ -15,8 +15,8 @@ NLOOP_DIR="/opt/nloop"
 ENV_FILE="$NLOOP_DIR/.env"
 
 SERVICE="${1:-nloop.service}"
-MSG_BEFORE="${2:-bentar yah gue restart dulu 🔧}"
-MSG_AFTER="${3:-hi gue balik lagi 👋}"
+MSG_BEFORE="${2:-hang on, restarting myself real quick 🔧}"
+MSG_AFTER="${3:-hey, I'm back 👋}"
 CHAT_ID="${4:-}"
 
 TOKEN="$(grep -E '^TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"'"'"'')"
@@ -45,5 +45,5 @@ done
 if [[ "$ok" -eq 1 ]]; then
   send "$MSG_AFTER"
 else
-  send "⚠️ $SERVICE gagal balik aktif setelah restart, tolong dicek manual."
+  send "⚠️ $SERVICE didn't come back up after the restart, please check it manually."
 fi

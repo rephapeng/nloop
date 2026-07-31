@@ -1,30 +1,30 @@
-# Workspace onecookie — agent yang ngurusin app MarginIn + OneCookie.
+# Workspace onecookie — the agent that looks after the MarginIn + OneCookie apps.
 #
-# Ini isi config.yaml lama (pra-workspace) yang dipindah ke sini apa adanya.
-# Yang tetap di config.yaml root cuma setelan level proses: server, loops,
-# claude, paths, memory. Lihat engine/workspaces.py.
+# This is the old (pre-workspace) config.yaml content, moved here as-is.
+# All that stays in the root config.yaml is the process-level settings: server, loops,
+# claude, paths, memory. See engine/workspaces.py.
 label: OneCookie
-primary: true        # workspace default buat request tanpa ?workspace=,
-                     # sekaligus yang mengadopsi run lama (pra-workspace)
+primary: true        # the default workspace for requests without ?workspace=,
+                     # and also the one that adopts the old (pre-workspace) runs
 
-# Reactive triggers: webhook Sentry/PostHog -> loop otomatis.
-# URL: POST /api/hooks/{sentry|posthog|generic}?workspace=onecookie&project=<nama>&token=<token>
+# Reactive triggers: Sentry/PostHog webhook -> automatic loop.
+# URL: POST /api/hooks/{sentry|posthog|generic}?workspace=onecookie&project=<name>&token=<token>
 triggers:
-  token: null              # WAJIB diisi string random kalau server-nya exposed
+  token: null              # MUST be set to a random string if the server is exposed
   sentry:
-    resolve: true          # run sukses -> mark issue resolved (SENTRY_AUTH_TOKEN di .env)
+    resolve: true          # run succeeds -> mark the issue resolved (SENTRY_AUTH_TOKEN in .env)
     url: https://sentry.io
   projects:
-    marginin:              # issue Sentry masuk -> repro -> fix -> push+deploy -> resolve
+    marginin:              # Sentry issue comes in -> repro -> fix -> push+deploy -> resolve
       workdir: /opt/marginin
-      verify_cmd: "npm run build"     # health check project (repro script otomatis di depannya)
-      repro: true                     # agent WAJIB tulis .nloop/repro/<issue>.sh dulu
+      verify_cmd: "npm run build"     # project health check (the repro script is prepended automatically)
+      repro: true                     # the agent MUST write .nloop/repro/<issue>.sh first
       on_success_cmd: >-
         git add -A && git commit -m "fix: auto-fix Sentry issue (nloop)" &&
         git push origin main && docker compose up -d --build
       max_iterations: 8
       max_cost_usd: 5.0
-    onecookie:             # toko kue — FastAPI + vanilla JS (lihat /opt/onecookie/CLAUDE.md)
+    onecookie:             # the cookie shop — FastAPI + vanilla JS (see /opt/onecookie/CLAUDE.md)
       workdir: /opt/onecookie
       verify_cmd: "python3 -m py_compile app/main.py app/db.py && node --check public/js/store.js && node --check public/admin/admin.js"
       repro: true
@@ -34,81 +34,82 @@ triggers:
       max_iterations: 8
       max_cost_usd: 5.0
 
-# Watchdog Sentry: poll issue unresolved tiap interval -> spawn loop issue-fix.
+# Sentry watchdog: poll unresolved issues every interval -> spawn an issue-fix loop.
 watchdog:
   enabled: true
-  interval: 1h             # default kalau project di bawah nggak override
-  cooldown: 24h            # issue yang barusan dicoba (sukses/gagal) jangan diulang dulu
+  interval: 1h             # the default when a project below doesn't override it
+  cooldown: 24h            # an issue that was just attempted (pass or fail) shouldn't be retried yet
   max_per_tick: 1
   organization: marginin
-  projects:                # tiap project poll SENDIRI-SENDIRI, interval bisa beda
+  projects:                # every project polls INDEPENDENTLY, intervals can differ
     marginin:
-      name: marginin        # <nama di triggers.projects>
-      interval: 30m         # TODO: sesuaikan — placeholder, ganti sesuai kebutuhan
+      name: marginin        # <name in triggers.projects>
+      interval: 30m         # TODO: tune this — placeholder, change it to fit
     onecookie:
       name: onecookie
-      interval: 2h          # TODO: sesuaikan — placeholder, ganti sesuai kebutuhan
+      interval: 2h          # TODO: tune this — placeholder, change it to fit
 
-# Task registry — definisi kerjaan yang bisa dipanggil ULANG dengan payload beda.
-# Bisa juga satu task per file di workspaces/onecookie/tasks/<id>.yaml.
+# Task registry — definitions of work that can be called AGAIN with a different payload.
+# Can also be one task per file in workspaces/onecookie/tasks/<id>.yaml.
 tasks:
   promo-post:
     name: "Promo post MarginIn"
     description: >-
-      Gimmick post promosi (twitter + threads) dijadwalin ke Buffer. Slot pagi
-      terbit 07:30 WIB, sore 19:00 WIB (jam post diatur scripts/buffer_post.py).
+      Promo hook posts (twitter + threads) scheduled into Buffer. The pagi slot
+      publishes 07:30 WIB, sore 19:00 WIB (post times live in scripts/buffer_post.py).
     payload:
-      required: [slot]     # pagi | sore
+      required: [slot]     # pagi (morning) | sore (evening)
     goal: >-
-      Bikin gimmick post promosi MarginIn buat slot {{slot}}: 1 post twitter +
-      1 post threads, jadwalin ke Buffer pake
+      Write MarginIn promo hook posts for the {{slot}} slot: 1 twitter post +
+      1 threads post, and schedule them into Buffer with
       /opt/nloop/.venv/bin/python3 /opt/nloop/scripts/buffer_post.py post
-      --slot {{slot}}. Ikuti aturan konten di role.
+      --slot {{slot}}. Follow the content rules in the role — the post copy
+      itself is written in Indonesian.
     verify_cmd: ".venv/bin/python3 scripts/buffer_post.py verify --slot {{slot}}"
     workdir: /opt/nloop
     role: buffer-promo
     context_cmd: ".venv/bin/python3 scripts/buffer_post.py recent -n 10"
     max_iterations: 4
     max_cost_usd: 1.5
-    idempotency_key: "promo:{{slot}}"   # 1 run aktif per slot, trigger dobel nggak numpuk
+    idempotency_key: "promo:{{slot}}"   # 1 active run per slot, double triggers don't pile up
 
-# Loop terjadwal. `at` = harian UTC, atau `every` = interval (30m/6h/1d). Steps
-# jalan BERURUTAN; step berikut cuma jalan kalau sebelumnya succeeded, kecuali
-# `always: true`. Step = `task:` + `payload:` ATAU goal+verify_cmd inline.
+# Scheduled loops. `at` = daily UTC, or `every` = an interval (30m/6h/1d). Steps run
+# IN ORDER; the next step only runs if the previous one succeeded, unless
+# `always: true`. A step is `task:` + `payload:` OR an inline goal+verify_cmd.
 #
-# promo-pagi/sore: task yang SAMA, payload beda — run nyala ~45 menit sebelum jam
-# post biar agent sempet nulis. Token Buffer di .env (BUFFER_ACCESS_TOKEN).
+# promo-pagi/sore: the SAME task, different payload — the run starts ~45 minutes before the
+# posting time so the agent has time to write. The Buffer token is in .env (BUFFER_ACCESS_TOKEN).
 schedules:
   promo-pagi:
-    at: "23:45"            # UTC = 06:45 WIB -> post terbit 07:30 WIB
+    at: "23:45"            # UTC = 06:45 WIB -> the post goes out at 07:30 WIB
     steps:
       - task: promo-post
         payload: {slot: pagi}
   promo-sore:
-    at: "11:15"            # UTC = 18:15 WIB -> post terbit 19:00 WIB
+    at: "11:15"            # UTC = 18:15 WIB -> the post goes out at 19:00 WIB
     steps:
       - task: promo-post
         payload: {slot: sore}
 
-# Laporan traffic harian promo (Buffer -> PostHog attribution) -> Telegram.
-# Deterministik (bukan loop claude) — cuma query PostHog + kirim teks, gratis.
+# Daily promo traffic report (Buffer -> PostHog attribution) -> Telegram.
+# Deterministic (not a claude loop) — it just queries PostHog + sends text, free.
 promo_report:
   enabled: true
-  at: "14:30"              # UTC = 21:30 WIB, abis slot sore & mayoritas hari udah lewat
-  days: 7                  # window agregat/tren/breakdown (Hari ini & Kemarin selalu ada)
-  send_on_start: true      # kirim sekali begitu nloop nyala, nggak nunggu jadwal besok
+  at: "14:30"              # UTC = 21:30 WIB, after the evening slot & most of the day is over
+  days: 7                  # window for aggregates/trends/breakdowns (Today & Yesterday are always included)
+  send_on_start: true      # send once as soon as nloop comes up, don't wait for tomorrow's schedule
 
-# Bot Telegram workspace ini. Karena `primary: true`, nama env var-nya tetap yang
-# lama: TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_CHAT_IDS (di .env, chmod 600).
+# This workspace's Telegram bot. Because of `primary: true`, the env var names stay the
+# old ones: TELEGRAM_BOT_TOKEN + TELEGRAM_ALLOWED_CHAT_IDS (in .env, chmod 600).
 telegram:
   enabled: true
-  notify: true             # broadcast run selesai ke semua chat allow-list
-  agent_workdir: .         # cwd buat chat freeform -> session Claude Code
-  model: null              # model chat substantif (null = default CLI)
-  model_smalltalk: sonnet  # sapaan pendek -> tier murah (hemat subscription)
+  notify: true             # broadcast finished runs to every allow-listed chat
+  agent_workdir: .         # cwd for freeform chat -> Claude Code session
+  model: null              # model for substantive chat (null = the CLI default)
+  model_smalltalk: sonnet  # short greetings -> cheap tier (saves the subscription)
   thinking_tokens: 10000
   cmd_timeout_sec: 900
-  max_turns: null          # null = tanpa batas turn buat chat (guardrail: timeout + auto-continue)
-  progress_interval_sec: 60  # kirim update progres ke chat tiap N detik (0 = off)
-  # role: agent            # roles/agent.md dipake sebagai persona chat
-  # context_cmd: "..."     # grounding segar buat tiap pesan chat
+  max_turns: null          # null = no turn limit for chat (guardrail: timeout + auto-continue)
+  progress_interval_sec: 60  # send a progress update to the chat every N seconds (0 = off)
+  # role: agent            # roles/agent.md used as the chat persona
+  # context_cmd: "..."     # fresh grounding for every chat message

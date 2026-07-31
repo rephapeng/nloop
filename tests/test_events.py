@@ -11,7 +11,7 @@ def test_publish_reaches_all_subscribers():
         bus.publish("run-a", {"id": 1, "type": "turn", "payload": {}})
         assert q1.get_nowait()["id"] == 1
         assert q2.get_nowait()["id"] == 1
-        assert other.empty()  # run lain nggak kena
+        assert other.empty()  # a different run is untouched
 
     asyncio.run(main())
 
@@ -42,6 +42,6 @@ def test_slow_subscriber_drops_not_blocks():
         q = bus.subscribe("r")
         for i in range(1500):  # > QUEUE_SIZE
             bus.publish("r", {"id": i})
-        assert q.qsize() == 1000  # sisanya ke-drop, publish nggak pernah block
+        assert q.qsize() == 1000  # the rest get dropped, publish never blocks
 
     asyncio.run(main())

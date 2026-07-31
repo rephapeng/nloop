@@ -12,17 +12,17 @@ def test_fail_with_output(tmp_path):
     v = asyncio.run(verifier.verify("echo boom >&2; exit 3", cwd=str(tmp_path)))
     assert not v.passed
     assert v.exit_code == 3
-    assert "boom" in v.output  # stderr ikut ke-capture
+    assert "boom" in v.output  # stderr is captured too
 
 
 def test_output_capped_from_tail(tmp_path):
     v = asyncio.run(verifier.verify(
-        "python3 -c \"print('a'*9000); print('EKOR')\"",
+        "python3 -c \"print('a'*9000); print('TAIL')\"",
         cwd=str(tmp_path), output_cap=200,
     ))
     assert len(v.output) < 300
-    assert "EKOR" in v.output          # bagian akhir yang disimpan
-    assert v.output.startswith("...[dipotong]...")
+    assert "TAIL" in v.output          # the tail is what we keep
+    assert v.output.startswith("...[truncated]...")
 
 
 def test_timeout(tmp_path):

@@ -1,4 +1,4 @@
-"""Unit test worker — claude di-fake; queue, semaphore, restart recovery beneran."""
+"""Worker unit tests — claude is faked; queue, semaphore, restart recovery are real."""
 import asyncio
 from pathlib import Path
 
@@ -36,7 +36,7 @@ async def wait_until(predicate, timeout=5.0):
 
 
 def install_fake_claude(monkeypatch, *, delay=0.0, fail=False):
-    """Fake: tulis done.txt (bikin verifier pass) + catat concurrency puncak."""
+    """Fake: writes done.txt (makes the verifier pass) + records peak concurrency."""
     state = {"active": 0, "max_active": 0, "calls": 0}
 
     async def fake_run(prompt, *, cwd, resume=None, **kwargs):
@@ -47,7 +47,7 @@ def install_fake_claude(monkeypatch, *, delay=0.0, fail=False):
             if delay:
                 await asyncio.sleep(delay)
             if fail:
-                raise RuntimeError("claude meledak (disengaja)")
+                raise RuntimeError("claude blew up (on purpose)")
             (Path(cwd) / "done.txt").write_text("ok")
             return ClaudeResult(ok=True, subtype="success", result_text="fixed",
                                 session_id="s", cost_usd=0.01, num_turns=1)
@@ -78,20 +78,20 @@ def test_semaphore_caps_concurrency(monkeypatch, store, cfg, tmp_path):
         return ids
 
     ids = asyncio.run(main())
-    assert state["calls"] == 3                 # semua run ke-proses
-    assert state["max_active"] == 2            # ...tapi maksimal 2 barengan (cap)
+    assert state["calls"] == 3                 # every run got processed
+    assert state["max_active"] == 2            # ...but at most 2 at a time (the cap)
     assert all(store.get_run(i)["status"] == "succeeded" for i in ids)
 
 
 def test_restart_requeues_orphan_running(monkeypatch, store, cfg, tmp_path):
-    """Simulasi crash: run ke-claim (status running) tapi prosesnya mati."""
+    """Crash simulation: the run got claimed (status running) but the process died."""
     install_fake_claude(monkeypatch)
     run_id = store.create_run("g", VERIFY, make_ws(tmp_path, "ws"))
     claimed = store.claim_queued()
     assert claimed == run_id
     assert store.get_run(run_id)["status"] == "running"   # orphan
 
-    async def main():  # "proses baru" boot
+    async def main():  # a "new process" boots
         worker = Worker(store, cfg)
         task = asyncio.create_task(worker.run_forever())
         await wait_until(lambda: store.get_run(run_id)["status"] == "succeeded")
@@ -107,7 +107,7 @@ def test_enqueue_while_worker_running(monkeypatch, store, cfg, tmp_path):
     async def main():
         worker = Worker(store, cfg)
         task = asyncio.create_task(worker.run_forever())
-        await asyncio.sleep(0.05)              # worker udah idle-polling
+        await asyncio.sleep(0.05)              # worker is already idle-polling
         run_id = store.create_run("g", VERIFY, make_ws(tmp_path, "ws"))
         await wait_until(lambda: store.get_run(run_id)["status"] == "succeeded")
         await worker.stop()
@@ -117,7 +117,7 @@ def test_enqueue_while_worker_running(monkeypatch, store, cfg, tmp_path):
 
 
 def test_crashed_loop_marks_failed_worker_survives(monkeypatch, store, cfg, tmp_path):
-    """Loop meledak → run failed, worker tetap hidup & proses run berikutnya."""
+    """Loop blows up → run failed, worker stays alive & processes the next run."""
     state = install_fake_claude(monkeypatch, fail=True)
     bad = store.create_run("g", "exit 1", make_ws(tmp_path, "bad"))
 
@@ -126,7 +126,7 @@ def test_crashed_loop_marks_failed_worker_survives(monkeypatch, store, cfg, tmp_
         task = asyncio.create_task(worker.run_forever())
         await wait_until(lambda: store.get_run(bad)["status"] == "failed")
 
-        state_ok = install_fake_claude_ok()    # ganti fake jadi sehat
+        state_ok = install_fake_claude_ok()    # swap the fake for a healthy one
         good = store.create_run("g", VERIFY, make_ws(tmp_path, "good"))
         await wait_until(lambda: store.get_run(good)["status"] == "succeeded")
         await worker.stop()
@@ -147,7 +147,7 @@ def test_crashed_loop_marks_failed_worker_survives(monkeypatch, store, cfg, tmp_
 
 
 def test_stop_leaves_queued_untouched(monkeypatch, store, cfg, tmp_path):
-    """stop() nggak ngegantung & run yang belum ke-claim tetap 'queued' (tahan restart)."""
+    """stop() doesn't hang & an unclaimed run stays 'queued' (survives a restart)."""
     install_fake_claude(monkeypatch)
 
     async def main():
@@ -155,7 +155,7 @@ def test_stop_leaves_queued_untouched(monkeypatch, store, cfg, tmp_path):
         task = asyncio.create_task(worker.run_forever())
         await worker.stop()
         await task
-        # baru di-enqueue SETELAH worker mati → harus tetap antri
+        # enqueued only AFTER the worker died → must stay queued
         run_id = store.create_run("g", VERIFY, make_ws(tmp_path, "ws"))
         return run_id
 

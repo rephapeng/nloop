@@ -1,6 +1,6 @@
-"""Verifier deterministik: goal tercapai = perintah shell exit 0.
+"""Deterministic verifier: the goal is met when a shell command exits 0.
 
-Sengaja TERPISAH dari agent — agent nggak boleh nilai dirinya sendiri selesai.
+Deliberately SEPARATE from the agent — the agent must never judge its own completion.
 """
 from __future__ import annotations
 
@@ -13,8 +13,8 @@ from dataclasses import dataclass
 class VerifyResult:
     passed: bool
     exit_code: int
-    output: str  # stdout+stderr digabung, di-cap dari ekor
-    duration: float = 0.0  # detik — dipakai span waterfall dashboard (Fase 12)
+    output: str  # stdout+stderr merged, capped from the tail
+    duration: float = 0.0  # seconds — used by the dashboard waterfall spans (Fase 12)
 
 
 async def verify(
@@ -42,6 +42,6 @@ async def verify(
 
     text = out.decode("utf-8", "replace")
     if len(text) > output_cap:
-        text = "...[dipotong]...\n" + text[-output_cap:]
+        text = "...[truncated]...\n" + text[-output_cap:]
     return VerifyResult(proc.returncode == 0, proc.returncode or 0, text,
                         time.time() - started)

@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
-"""Laporan attribution promo Buffer -> PostHog, pake link UTM yang di-append
-scripts/buffer_post.py (utm_source=twitter|threads, utm_campaign=pagi|sore|manual).
+"""Buffer -> PostHog promo attribution report, using the UTM links that
+scripts/buffer_post.py appends (utm_source=twitter|threads, utm_campaign=pagi|sore|manual).
 
-MarginIn (project 504239) sengaja nggak nyimpen personal API key PostHog di
-.env-nya sendiri (cuma public project key buat kirim event) — key BUAT QUERY
-disimpen di .env nloop ini (POSTHOG_PERSONAL_API_KEY), khusus dipake reporting
-lintas-project kayak gini.
+MarginIn (project 504239) deliberately does NOT keep a PostHog personal API key in its
+own .env (only the public project key, for sending events) — the key FOR QUERYING lives
+in this nloop .env (POSTHOG_PERSONAL_API_KEY), used only for cross-project reporting
+like this.
 
-Pageview dari klik link UTM otomatis punya properti utm_source/utm_campaign
-(di-parse PostHog JS SDK dari query string). Output-nya Markdown (tabel pipe +
-bold + bullet) — scripts/promo_report.py dipake mentah di terminal, dan lewat
-engine/promo_reporter.py di-convert ke HTML Telegram (engine.telegram.md_to_tg_html)
-biar tabelnya kebentuk grid rapi kayak laporan bot lain.
+A pageview from a UTM link click automatically carries utm_source/utm_campaign
+properties (the PostHog JS SDK parses them off the query string). Output is Markdown
+(pipe table + bold + bullets) — scripts/promo_report.py is used raw in the terminal, and
+via engine/promo_reporter.py it gets converted to Telegram HTML
+(engine.telegram.md_to_tg_html) so the table renders as a neat grid like the other bot
+reports.
 
-Pemakaian:
-    .venv/bin/python3 scripts/promo_report.py               # default 7 hari
+Usage:
+    .venv/bin/python3 scripts/promo_report.py               # default 7 days
     .venv/bin/python3 scripts/promo_report.py --days 14
 """
 from __future__ import annotations
@@ -32,17 +33,17 @@ sys.path.insert(0, str(ROOT))
 from engine.config import load_env  # noqa: E402
 
 POSTHOG_HOST = "https://us.i.posthog.com"
-PROJECT_ID = "504239"  # MarginIn — lihat lib/monitoring.ts (NEXT_PUBLIC_POSTHOG_KEY sama)
+PROJECT_ID = "504239"  # MarginIn — see lib/monitoring.ts (same NEXT_PUBLIC_POSTHOG_KEY)
 WIB = timezone(timedelta(hours=7))
 PROMO_SOURCES = "'twitter', 'threads'"
-TREND_POINTS = 7  # cap panjang rantai panah tren, berapa pun `days`-nya
+TREND_POINTS = 7  # cap on the trend arrow chain, no matter how big `days` is
 
 
 def hogql(query: str) -> list:
     import httpx
     token = os.environ.get("POSTHOG_PERSONAL_API_KEY")
     if not token:
-        sys.exit("POSTHOG_PERSONAL_API_KEY belum diset (isi di .env nloop)")
+        sys.exit("POSTHOG_PERSONAL_API_KEY is not set (put it in the nloop .env)")
     r = httpx.post(
         f"{POSTHOG_HOST}/api/projects/{PROJECT_ID}/query/",
         headers={"Authorization": f"Bearer {token}"},
@@ -56,24 +57,24 @@ def hogql(query: str) -> list:
     return data.get("results") or []
 
 
-# ---------- helper tanggal WIB (pure, dites tanpa network) ----------
+# ---------- WIB date helpers (pure, tested without network) ----------
 
 def wib_dates(n: int, end: datetime) -> list[str]:
-    """n tanggal WIB ('YYYY-MM-DD') berturutan, LAMA -> BARU, berakhir di hari `end`."""
+    """n consecutive WIB dates ('YYYY-MM-DD'), OLD -> NEW, ending on day `end`."""
     end_date = end.astimezone(WIB).date()
     return [(end_date - timedelta(days=i)).isoformat() for i in range(n - 1, -1, -1)]
 
 
 def fill_daily(rows: list, dates: list[str]) -> dict[str, tuple[int, int]]:
-    """rows: [(date_str, pv, uniq), ...] dari HogQL -> dict lengkap (0-filled buat
-    tanggal yang nggak punya event sama sekali, karena group-by ngilangin baris kosong)."""
+    """rows: [(date_str, pv, uniq), ...] from HogQL -> a complete dict (0-filled for the
+    dates with no events at all, since a group-by drops empty rows entirely)."""
     by_date = {str(d): (int(pv), int(uq)) for d, pv, uq in rows}
     return {d: by_date.get(d, (0, 0)) for d in dates}
 
 
 def pct_change(today: int, yday: int) -> str:
     if yday == 0:
-        return "baru" if today > 0 else "flat"
+        return "new" if today > 0 else "flat"
     delta = round((today - yday) / yday * 100)
     return f"+{delta}%" if delta >= 0 else f"{delta}%"
 
@@ -81,8 +82,8 @@ def pct_change(today: int, yday: int) -> str:
 # ---------- queries ----------
 
 def daily_series(days: int, source_filter: bool = False) -> list:
-    """Marker -- daily_promo / -- daily_site: (date, pv, uniq) per hari WIB, N+2 hari
-    ke belakang (buffer batas hari) — dipangkas presisi di Python via fill_daily()."""
+    """Marker -- daily_promo / -- daily_site: (date, pv, uniq) per WIB day, N+2 days back
+    (buffer for the day boundary) — trimmed precisely in Python via fill_daily()."""
     marker = "-- daily_promo" if source_filter else "-- daily_site"
     extra = f"and properties.utm_source in ({PROMO_SOURCES})" if source_filter else ""
     return hogql(f"""
@@ -97,10 +98,11 @@ def daily_series(days: int, source_filter: bool = False) -> list:
 
 
 def window_uniques(since_date: str, source_filter: bool = False) -> int:
-    """Marker -- window_uniq_promo / -- window_uniq_site: distinct visitor SELURUH
-    window sejak `since_date` (WIB, inklusif) — beda dari jumlah per-hari yang bisa
-    dobel-hitung orang yang balik lagi. Filter tanggal WIB biar align sama site_week/
-    promo_week (sum harian) di campaign_report, bukan rolling `now() - N hari`."""
+    """Marker -- window_uniq_promo / -- window_uniq_site: distinct visitors across the
+    WHOLE window since `since_date` (WIB, inclusive) — different from summing the per-day
+    counts, which double-counts anyone who comes back. Filtering on the WIB date keeps it
+    aligned with site_week/promo_week (daily sums) in campaign_report, instead of a
+    rolling `now() - N days`."""
     marker = "-- window_uniq_promo" if source_filter else "-- window_uniq_site"
     extra = f"and properties.utm_source in ({PROMO_SOURCES})" if source_filter else ""
     rows = hogql(f"""
@@ -114,7 +116,7 @@ def window_uniques(since_date: str, source_filter: bool = False) -> int:
 
 
 def campaign_breakdown(since_date: str) -> list:
-    """Marker -- breakdown: (source, campaign, pv, uniq) per pasangan, sejak `since_date` WIB."""
+    """Marker -- breakdown: (source, campaign, pv, uniq) per pair, since `since_date` WIB."""
     return hogql(f"""
         -- breakdown
         select properties.utm_source as source, properties.utm_campaign as campaign,
@@ -126,14 +128,14 @@ def campaign_breakdown(since_date: str) -> list:
     """)
 
 
-FIRST_CLICK_LOOKBACK_DAYS = 90  # campaign UTM baru mulai — batasin scan biar ClickHouse murah
+FIRST_CLICK_LOOKBACK_DAYS = 90  # UTM campaigns are brand new — cap the scan, keep it cheap
 
 
 def first_promo_click() -> str | None:
-    """Marker -- first_click: timestamp klik promo PERTAMA dalam FIRST_CLICK_LOOKBACK_DAYS
-    hari terakhir (buat deteksi milestone), None kalau belum pernah ada. Sengaja DIBATASIN
-    (bukan sepanjang masa) — tanpa batas timestamp, ClickHouse full-scan tabel events dan
-    query-nya bisa 504 Gateway Timeout di PostHog."""
+    """Marker -- first_click: timestamp of the FIRST promo click within the last
+    FIRST_CLICK_LOOKBACK_DAYS days (for milestone detection), None if there never was one.
+    Deliberately CAPPED (not all-time) — without a timestamp bound ClickHouse full-scans
+    the events table and the query can come back as a 504 Gateway Timeout from PostHog."""
     rows = hogql(f"""
         -- first_click
         select min(timestamp) as t
@@ -144,13 +146,13 @@ def first_promo_click() -> str | None:
     return rows[0][0] if rows and rows[0][0] else None
 
 
-# ---------- laporan ----------
+# ---------- report ----------
 
 def campaign_report(days: int = 7, now: datetime | None = None) -> str:
     now = now or datetime.now(timezone.utc)
     dates = wib_dates(max(days, TREND_POINTS), now)
     today, yday = dates[-1], dates[-2]
-    since = dates[-days]  # tanggal WIB `days` hari ke belakang (inklusif hari ini)
+    since = dates[-days]  # the WIB date `days` days back (today inclusive)
 
     site = fill_daily(daily_series(len(dates), source_filter=False), dates)
     promo = fill_daily(daily_series(len(dates), source_filter=True), dates)
@@ -170,38 +172,42 @@ def campaign_report(days: int = 7, now: datetime | None = None) -> str:
     tgl = now.astimezone(WIB).strftime("%d %b %Y")
 
     lines = [
-        f"📊 **Traffic MarginIn** — {tgl} (baru {jam} WIB)",
+        f"📊 **MarginIn Traffic** — {tgl} (as of {jam} WIB)",
         "",
-        "**🚦 Ringkasan**",
-        "| Periode | Pageview | Unique | Klik Promo |",
+        "**🚦 Summary**",
+        "| Period | Pageviews | Unique | Promo clicks |",
         "|---|---|---|---|",
-        f"| Hari ini | {pv_today} | {uq_today} | {promo_today} |",
-        f"| Kemarin | {pv_yday} | {uq_yday} | {promo_yday_pv} |",
-        f"| {days} hari | {site_week} | {site_uniq_week} | {promo_week} |",
+        f"| Today | {pv_today} | {uq_today} | {promo_today} |",
+        f"| Yesterday | {pv_yday} | {uq_yday} | {promo_yday_pv} |",
+        f"| {days} days | {site_week} | {site_uniq_week} | {promo_week} |",
         "",
     ]
 
-    cmp_word = "ngelampauin" if pv_today > pv_yday else ("masih di bawah" if pv_today < pv_yday else "setara")
-    lines.append(f"- Hari ini ({pv_today} pageview) {cmp_word} kemarin ({pv_yday}) — {pct_change(pv_today, pv_yday)}")
+    cmp_word = ("beat" if pv_today > pv_yday
+                else "is still under" if pv_today < pv_yday else "matches")
+    lines.append(f"- Today ({pv_today} pageviews) {cmp_word} yesterday ({pv_yday})"
+                 f" — {pct_change(pv_today, pv_yday)}")
 
     trend = [site[d][0] for d in dates[-TREND_POINTS:]]
-    lines.append(f"- Tren {len(trend)} hari (pageview situs): {' → '.join(str(v) for v in trend)}")
+    arrows = ' → '.join(str(v) for v in trend)
+    lines.append(f"- {len(trend)}-day trend (site pageviews): {arrows}")
 
     if promo_week == 0:
-        lines.append(f"- Belum ada klik dari post Twitter/Threads di {days} hari terakhir")
+        lines.append(f"- No clicks from Twitter/Threads posts in the last {days} days")
     else:
-        lines.append(f"- Klik promo {days} hari: {promo_week} pageview, {promo_uniq_week} unique visitor"
-                     + (f" ({promo_today} di antaranya hari ini)" if promo_today else ""))
+        lines.append(f"- Promo clicks over {days} days: {promo_week} pageviews, "
+                     f"{promo_uniq_week} unique visitors"
+                     + (f" ({promo_today} of them today)" if promo_today else ""))
 
     if breakdown:
-        lines += ["", "**📣 Per campaign**", "| Source | Campaign | Pageview | Unique |", "|---|---|---|---|"]
+        lines += ["", "**📣 Per campaign**", "| Source | Campaign | Pageviews | Unique |", "|---|---|---|---|"]
         for source, campaign, pv, uniq in breakdown:
             lines.append(f"| {source} | {campaign} | {pv} | {uniq} |")
 
     if first_click:
         first_date = datetime.fromisoformat(str(first_click).replace("Z", "+00:00")).astimezone(WIB).date().isoformat()
         if first_date == today:
-            lines += ["", "🏆 **MILESTONE: klik promo PERTAMA dari campaign ini!** 🎉"]
+            lines += ["", "🏆 **MILESTONE: the FIRST promo click of this campaign!** 🎉"]
 
     return "\n".join(lines)
 
@@ -210,8 +216,10 @@ def main(argv: list[str] | None = None) -> int:
     load_env(str(ROOT / ".env"))
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--days", type=int, default=7, help="window agregat/breakdown (default: 7)")
-    ap.add_argument("--json", action="store_true", help="print breakdown mentah, bukan format rapi")
+    ap.add_argument("--days", type=int, default=7,
+                    help="aggregate/breakdown window (default: 7)")
+    ap.add_argument("--json", action="store_true",
+                    help="print the raw breakdown instead of the formatted report")
     args = ap.parse_args(argv)
     if args.json:
         since = wib_dates(args.days, datetime.now(timezone.utc))[0]

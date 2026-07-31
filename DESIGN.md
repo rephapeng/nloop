@@ -1,101 +1,100 @@
-# DESIGN.md — sistem visual dashboard nloop
+# DESIGN.md — the nloop dashboard visual system
 
-Dokumen buat sesi berikutnya (manusia atau agent) biar nggak nebak-nebak lagi:
-di mana tokennya, komponennya apa aja, dan aturan motion-nya gimana.
+A document for the next session (human or agent) so nobody has to guess again:
+where the tokens are, what the components are, and how motion works.
 
-Semua yang dibahas di sini ada di `server/static/` — vanilla CSS + JS, **tanpa build
-step, tanpa framework, tanpa dependency**. Itu disengaja (lihat "Resource frugality"
-di CLAUDE.md); jangan diam-diam nambahin Tailwind/React/Framer Motion.
+Everything here lives in `server/static/` — vanilla CSS + JS, **no build step, no
+framework, no dependencies**. That is deliberate (see "Resource frugality" in
+CLAUDE.md); don't quietly add Tailwind/React/Framer Motion.
 
-File:
+Files:
 
 ```
-server/static/style.css   satu-satunya stylesheet — token + semua komponen
-server/static/common.js   helper + shell sidebar + mesin scroll reveal
-server/static/runs.js     halaman Runs
-server/static/run.js      halaman Run (waterfall + log)
-server/static/tasks.js    halaman Tasks + Task detail
-server/static/schedules.js halaman Schedules + watchdog
+server/static/style.css    the only stylesheet — tokens + every component
+server/static/common.js    helpers + sidebar shell + the scroll-reveal engine
+server/static/runs.js      Runs page
+server/static/run.js       Run page (waterfall + log)
+server/static/tasks.js     Tasks page + Task detail
+server/static/schedules.js Schedules page + watchdog
 ```
 
 ---
 
-## 1. Design token
+## 1. Design tokens
 
-Semua warna, radius, bayangan, durasi, dan easing ada di `:root` paling atas
-`style.css`. **Aturan keras: jangan tulis hex literal di rule manapun.** Kalau butuh
-warna baru, tambahin token dulu, baru dipakai. Alasannya sepele: dark/light mode
-di-override lewat `@media (prefers-color-scheme: light)` yang cuma nimpa token —
-hex yang berserakan nggak ikut ke-override dan bakal keliatan salah di light mode.
+Every color, radius, shadow, duration, and easing lives in `:root` at the top of
+`style.css`. **Hard rule: never write a hex literal in a rule.** If you need a new
+color, add a token first, then use it. The reason is simple: dark/light mode is
+overridden through `@media (prefers-color-scheme: light)`, which only overwrites
+tokens — stray hex values don't get overridden and will look wrong in light mode.
 
-### Warna
+### Color
 
-| token | dipakai buat |
+| token | used for |
 |---|---|
-| `--bg` | latar halaman |
-| `--surface` / `--surface-2` | card & sidebar / elemen di atas card (bar, chip, hover) |
-| `--border` / `--border-strong` | garis normal / garis pas hover & elemen aktif |
-| `--text` / `--muted` / `--faint` | teks utama / sekunder / tersier |
-| `--accent` (+`--accent-soft`) | biru — running, link, primary, seleksi |
+| `--bg` | page background |
+| `--surface` / `--surface-2` | cards & sidebar / elements on top of a card (bars, chips, hover) |
+| `--border` / `--border-strong` | normal rules / hover and active-element rules |
+| `--text` / `--muted` / `--faint` | primary / secondary / tertiary text |
+| `--accent` (+`--accent-soft`) | blue — running, links, primary, selection |
 | `--green` (+`-soft`) | succeeded, verify pass |
-| `--red` (+`-soft`) | failed, tombol danger |
+| `--red` (+`-soft`) | failed, danger buttons |
 | `--amber` (+`-soft`) | queued, tool, task, warning |
 | `--purple` (+`-soft`) | quality gate |
-| `--on-accent` | teks di atas bidang `--accent` (tombol primary, badge live) |
-| `--hatch` | arsir bar span yang durasinya cuma taksiran |
+| `--on-accent` | text on an `--accent` surface (primary button, live badge) |
+| `--hatch` | hatching on span bars whose duration is only estimated |
 
-Pola `-soft` = versi 12–14% alpha dari warna yang sama, buat background pill/chip.
-Border-nya pakai `color-mix(in srgb, var(--x) 35%, transparent)` — konsisten, jangan
-bikin varian alpha baru.
+The `-soft` pattern is a 12–14% alpha version of the same color, for pill/chip
+backgrounds. Their borders use `color-mix(in srgb, var(--x) 35%, transparent)` —
+keep it consistent, don't invent new alpha variants.
 
-### Bentuk & elevasi
+### Shape & elevation
 
-`--radius: 10px` (card), 8px (input/tombol), 999px (pill/chip/bar).
+`--radius: 10px` (cards), 8px (inputs/buttons), 999px (pills/chips/bars).
 
-| token | kapan |
+| token | when |
 |---|---|
-| `--shadow` | keadaan diam semua `.card` |
-| `--shadow-sm` | angkatan kecil: tombol & chip pas hover |
-| `--shadow-hover` | card yang bisa diklik pas hover (task card, sched row) |
+| `--shadow` | resting state of every `.card` |
+| `--shadow-sm` | small rise: buttons & chips on hover |
+| `--shadow-hover` | clickable cards on hover (task card, sched row) |
 
 ### Motion
 
-| token | nilai | dipakai buat |
+| token | value | used for |
 |---|---|---|
-| `--dur-fast` | 110ms | transform tombol (press/lift) |
-| `--dur` | 180ms | hover pada umumnya (warna, border, shadow) |
+| `--dur-fast` | 110ms | button transforms (press/lift) |
+| `--dur` | 180ms | hover in general (color, border, shadow) |
 | `--dur-slow` | 480ms | scroll reveal |
-| `--ease` | `cubic-bezier(.22,.61,.36,1)` | transisi biasa |
-| `--ease-out` | `cubic-bezier(.16,1,.3,1)` | apa pun yang "masuk" (reveal, pop, grow) |
-| `--lift` | `-2px` | jarak angkat standar pas hover |
-| `--stagger` | 55ms | jeda antar item di grid/tabel pas reveal |
+| `--ease` | `cubic-bezier(.22,.61,.36,1)` | ordinary transitions |
+| `--ease-out` | `cubic-bezier(.16,1,.3,1)` | anything entering (reveal, pop, grow) |
+| `--lift` | `-2px` | the standard hover rise |
+| `--stagger` | 55ms | delay between grid/table items during reveal |
 
 ---
 
-## 2. Komponen
+## 2. Components
 
-Bentuk yang udah ada — pakai ulang, jangan bikin varian baru tanpa alasan.
+The shapes that already exist — reuse them, don't add variants without a reason.
 
-- **`.card`** — surface + border + `--shadow`. Semua panel pakai ini. Tambah `.pad`
-  kalau butuh padding standar.
-- **`.badge.<status>`** — pill status run (`running` `queued` `succeeded` `failed`
-  `stopped`), lengkap sama titik di depan. `running` titiknya berdenyut. Dirakit
-  lewat helper `badge(status)` di `common.js` — jangan tulis HTML-nya manual.
-- **`.chip`** — metadata kecil. Varian: `.task` (amber), `.role` (biru), `.gate`
-  (ungu), `.step` (langkah schedule, ikut warna status). `<a class="chip">` otomatis
-  dapet hover angkat.
-- **`.bar`** — progress mini (`<div class="bar"><i style="width:%"></i></div>`).
-  Varian `.ok` `.bad` `.warn`. Lebarnya beranimasi, jadi **jangan render ulang
-  elemennya tiap poll** — update `style.width`-nya aja (lihat §4).
-- **`.pill` / `.pills`** — tombol filter. `.on` = kepilih.
-- **`.tbl`** di dalam `.table-wrap.card` — tabel padat. `<tr data-goto="/url">` bikin
-  barisnya bisa diklik + dapet hover.
-- **`.task-card`** — kartu di grid Tasks; hover-nya paling "kerasa" (angkat + shadow
-  + ikon nge-zoom) karena ini entry point utama.
-- **`.span-row`** — baris waterfall di halaman Run.
-- **`.empty`** — keadaan kosong. Selalu kasih tahu *cara ngisinya*, jangan cuma
-  "belum ada data".
-- **`.hint-box`** — catatan kecil di panel.
+- **`.card`** — surface + border + `--shadow`. Every panel uses it. Add `.pad` when
+  you want the standard padding.
+- **`.badge.<status>`** — run status pill (`running` `queued` `succeeded` `failed`
+  `stopped`), dot included. `running` has a pulsing dot. Built by the `badge(status)`
+  helper in `common.js` — don't hand-write the markup.
+- **`.chip`** — small metadata. Variants: `.task` (amber), `.role` (blue), `.gate`
+  (purple), `.step` (schedule step, follows status color). An `<a class="chip">`
+  automatically gets the hover rise.
+- **`.bar`** — mini progress (`<div class="bar"><i style="width:%"></i></div>`).
+  Variants `.ok` `.bad` `.warn`. Its width is animated, so **don't re-render the
+  element on every poll** — just update `style.width` (see §4).
+- **`.pill` / `.pills`** — filter buttons. `.on` = selected.
+- **`.tbl`** inside `.table-wrap.card` — dense table. `<tr data-goto="/url">` makes a
+  row clickable and gives it hover treatment.
+- **`.task-card`** — card in the Tasks grid; its hover is the most pronounced (rise +
+  shadow + icon zoom) because this is the main entry point.
+- **`.span-row`** — waterfall row on the Run page.
+- **`.empty`** — empty state. Always say *how to fill it*, never just "no data yet".
+- **`.hint-box`** — small note inside a panel.
 
 ---
 
@@ -103,94 +102,94 @@ Bentuk yang udah ada — pakai ulang, jangan bikin varian baru tanpa alasan.
 
 ### Scroll reveal
 
-Mesinnya `reveal()` / `revealChildren()` di `common.js` — IntersectionObserver polos,
-nggak ada library. Elemen ber-class `reveal` mulai transparan, terus dianimasiin
-(`nl-rise`: fade + geser 12px ke atas) begitu masuk viewport.
+The engine is `reveal()` / `revealChildren()` in `common.js` — a plain
+IntersectionObserver, no library. An element carrying `reveal` starts transparent and
+animates in (`nl-rise`: fade + 12px slide up) once it enters the viewport.
 
 ```js
-revealChildren($('#tasks'));                  // grid: tiap anak dapet stagger
-revealChildren($('#runs'), ':scope > tr');    // tabel: per baris
-reveal();                                     // section statis yang class-nya ditulis di HTML
+revealChildren($('#tasks'));                  // grid: each child gets a stagger
+revealChildren($('#runs'), ':scope > tr');    // table: per row
+reveal();                                     // static sections that declared the class in HTML
 ```
 
-Tiga hal yang gampang kelewat:
+Three things that are easy to miss:
 
-1. **Digate `html.motion`**, yang dipasang inline script di `<head>` tiap halaman.
-   Tanpa JS, `.reveal` nggak ngefek sama sekali → konten tetap kelihatan. Kalau nambah
-   halaman baru, jangan lupa bawa script satu baris itu.
-2. **Ada jaring pengaman.** Kalau observer nggak pernah nembak (tab background,
-   elemen ke-`display:none`), timer 1,5 detik maksa semua muncul. Animasi nggak boleh
-   sampai bikin dashboard blank.
-3. **`animation-fill-mode: backwards`, bukan `forwards`** — begitu animasi kelar,
-   `transform` balik ke milik elemen sendiri, jadi lift pas hover tetap jalan. Kalau
-   pakai `forwards`, `transform: none` dari keyframe bakal ngunci hover-nya.
+1. **It is gated on `html.motion`**, set by an inline script in each page's `<head>`.
+   With no JS, `reveal` does nothing at all → content still shows. If you add a page,
+   don't forget that one-line script.
+2. **There is a safety net.** If the observer never fires (background tab, an element
+   under `display:none`), a 1.5-second timer forces everything visible. Animation must
+   never blank out the dashboard.
+3. **`animation-fill-mode: backwards`, not `forwards`** — once the animation ends,
+   `transform` reverts to the element's own, so the hover lift keeps working. With
+   `forwards`, the keyframe's `transform: none` would lock hover out.
 
-`--i` (index stagger) di-cap di 12 biar item ke-30 nggak nunggu 1,6 detik.
+`--i` (the stagger index) is capped at 12 so item #30 doesn't wait 1.6 seconds.
 
 ### Hover
 
-Bahasa gerakannya satu: **angkat + bayangin**, `translateY(var(--lift))` +
-`--shadow-sm`/`--shadow-hover`, `--dur`, dan `:active` balik ke `translateY(0)`
-biar kerasa ketekan. Yang dapet:
+One movement language throughout: **rise + shadow**, `translateY(var(--lift))` plus
+`--shadow-sm`/`--shadow-hover` over `--dur`, with `:active` returning to
+`translateY(0)` so it feels pressed. It applies to:
 
-- tombol (semua varian), chip yang berupa link, pill filter
-- `.task-card` — plus ikonnya `scale(1.15) rotate(-8deg)` dan nama-nya jadi accent
+- buttons (all variants), chips that are links, filter pills
+- `.task-card` — plus its icon at `scale(1.15) rotate(-8deg)` and the name turning accent
 - `.sched-row`, `.run-row`
-- baris tabel — bukan diangkat, tapi background + garis accent `inset 3px` di kiri,
-  dan teks goal-nya geser 3px (baris tabel jelek kalau dikasih transform)
-- nav sidebar — geser 3px + ikon membesar; logo brand muter dikit
-- `.span-row` — background + bar-nya lebih terang
+- table rows — not a rise but a background plus a 3px inset accent bar on the left,
+  with the goal text sliding 3px (table rows look bad under a transform)
+- sidebar nav — slides 3px with the icon scaling up; the brand logo rotates slightly
+- `.span-row` — background plus a brighter bar
 
-Semua kontrol juga punya `:focus-visible` ring accent. Hover doang nggak cukup —
-halaman ini dipakai lewat keyboard.
+Every control also has a `:focus-visible` accent ring. Hover alone isn't enough — this
+page gets driven from the keyboard too.
 
 ### Reduced motion
 
-`@media (prefers-reduced-motion: reduce)` matiin semua animasi & transisi global,
-dan `.reveal` langsung tampil. `common.js` juga baca `REDUCED` dan nggak masang
-observer sama sekali. Sekali lagi: **jangan ada konten yang cuma kelihatan lewat
-animasi.**
+`@media (prefers-reduced-motion: reduce)` kills every animation and transition
+globally, and `.reveal` shows immediately. `common.js` also reads `REDUCED` and skips
+installing the observer entirely. Once more: **no content may be visible only through
+an animation.**
 
 ---
 
-## 4. Aturan render (kenapa polling nggak boleh nulis innerHTML terus)
+## 4. Render rules (why polling must not rewrite innerHTML)
 
-Dashboard-nya ngepoll: Runs tiap 3 detik, Schedules 5 detik, trace di halaman Run
-tiap 1,5 detik. Dulu tiap poll nulis ulang `innerHTML` satu blok penuh, dan itu
-diam-diam ngerusak banyak hal:
+The dashboard polls: Runs every 3 seconds, Schedules every 5, the run page trace every
+1.5. Each tick used to rewrite a whole block's `innerHTML`, and that quietly broke
+several things:
 
-- `transition: width` di `.bar` **nggak pernah kepakai** — elemennya baru terus, jadi
-  nggak ada nilai lama buat ditransisiin. Animasinya ada di CSS tapi nggak pernah jalan.
-- state hover ke-reset tiap 3 detik (kursor diam, tapi highlight-nya kedip-kedip)
-- teks yang lagi diblok user ilang, fokus keyboard lompat
+- `transition: width` on `.bar` **never ran once** — the element was new every time, so
+  there was no old value to transition from. The animation existed in CSS but never played.
+- hover state reset every 3 seconds (cursor still, highlight flickering)
+- selected text disappeared, keyboard focus jumped
 
-Polanya sekarang:
+The pattern now:
 
-- **`runs.js`** — `paintRows()` bandingin urutan id run. Sama → `updateRow()` yang
-  cuma nyentuh sel yang berubah lewat `[data-c="..."]` dan nge-set `style.width`
-  bar-nya (jadi transisinya beneran jalan). Beda → baru render ulang + reveal.
-- **`schedules.js`** — `paint(sel, html)` bandingin string HTML-nya; DOM disentuh
-  cuma kalau beda. Fungsinya balikin `changed` supaya listener nggak dipasang dobel.
-  Konsekuensinya: tombol yang di-disable manual (`Run now`, `Poll now`) harus
-  dibalikin sendiri kalau panelnya ternyata nggak dirender ulang.
-- **`run.js`** — klik span pakai `selectSpan()` (toggle class doang), bukan gambar
-  ulang seluruh waterfall.
+- **`runs.js`** — `paintRows()` compares the ordered run ids. Same → `updateRow()`
+  touches only the cells that changed via `[data-c="..."]` and sets the bar's
+  `style.width` (so the transition actually plays). Different → full re-render + reveal.
+- **`schedules.js`** — `paint(sel, html)` compares the HTML string; the DOM is only
+  touched when it differs. It returns `changed` so listeners aren't bound twice. The
+  consequence: buttons disabled by hand (`Run now`, `Poll now`) must be restored
+  manually when the panel turns out not to have been re-rendered.
+- **`run.js`** — clicking a span goes through `selectSpan()` (a class toggle), not a
+  full waterfall redraw.
 
-Kalau nambah panel yang ngepoll, ikutin salah satu pola ini. Patokannya:
-**yang nggak berubah, jangan disentuh.**
+If you add a polling panel, follow one of these. The rule of thumb: **don't touch what
+didn't change.**
 
-Terkait: log live di halaman Run cuma auto-scroll kalau user emang lagi nempel di
-bawah. Kalau lagi scroll ke atas baca sesuatu, tombol "↓ log terbaru" yang muncul —
-dulu tiap event maksa `scrollTop`, jadi layarnya ketarik terus pas lagi dibaca.
+Related: the live log on the Run page only auto-scrolls when the user is already stuck
+to the bottom. Scroll up to read something and a "↓ latest" button appears instead —
+every event used to force `scrollTop`, which yanked the view away mid-read.
 
 ---
 
-## 5. Nambah halaman baru
+## 5. Adding a new page
 
-1. Copy struktur `<head>` dari halaman yang udah ada — termasuk inline script
-   `classList.add('motion')`.
+1. Copy the `<head>` structure from an existing page — including the inline
+   `classList.add('motion')` script.
 2. `<body data-page="x" data-nav="runs|tasks|schedules">` + `<aside id="sidebar">`.
-3. Muat `common.js` dulu, baru script halamannya.
-4. Kasih `class="reveal"` ke section statis; panggil `revealChildren()` buat list
-   yang dirender JS.
-5. Kalau ngepoll, ikutin §4.
+3. Load `common.js` first, then the page script.
+4. Put `class="reveal"` on static sections; call `revealChildren()` for lists
+   rendered by JS.
+5. If it polls, follow §4.

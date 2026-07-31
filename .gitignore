@@ -4,8 +4,8 @@ __pycache__/
 *.db
 *.db-wal
 *.db-shm
-# workspaces/ sekarang = config tenant (workspaces/<nama>/config.yaml) — DI-COMMIT.
-# Workdir sekali pakai pindah ke .scratch/ (paths.scratch).
+# workspaces/ now holds tenant config (workspaces/<name>/config.yaml) — COMMITTED.
+# Throwaway workdirs moved to .scratch/ (paths.scratch).
 .scratch/
 workspaces/e2e-demo/
 .env

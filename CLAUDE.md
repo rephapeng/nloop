@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 nloop is an autonomous loop engine ("loop engineering"): it runs `observe → act → verify → recover` cycles until a goal is verifiably achieved. The **act** step spawns `claude -p` as a subprocess (subscription auth, NOT API billing); the **verify** step is a deterministic shell command. A FastAPI server exposes REST + SSE and serves a vanilla-JS dashboard. `PLAN.md` is the authoritative design doc — phases, data model, and guardrails all live there; keep it in sync when architecture changes.
 
-Code comments and docs are written in casual Indonesian — match that style.
+Code comments and docs are written in English — plain and direct, engineer to engineer, explaining *why* rather than restating *what*. Match that style; no corporate tone.
 
 ## Commands
 

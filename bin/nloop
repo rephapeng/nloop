@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""nloop CLI — kontrol engine dari terminal (pola bin/dtc).
+"""nloop CLI — drive the engine from the terminal (the bin/dtc pattern).
 
-  nloop new "<goal>" "<verify_cmd>" [workdir]   antri loop baru (ad-hoc)
-  nloop tasks                                   daftar task di registry
-  nloop run <task> [k=v ...]                    trigger task dengan payload
-  nloop ls [--task X] [--status X]              daftar run + status + cost
-  nloop show <run_id>                           detail run + iterasi
-  nloop stop <run_id>                           minta stop
-  nloop schedules                               daftar schedule + status
-  nloop trigger <schedule>                      jalankan pipeline schedule sekarang
-  nloop ask "<pertanyaan>" [--role X]           Q&A one-shot (read-only, tanpa server)
-  nloop ws                                      daftar workspace (tenant)
+  nloop new "<goal>" "<verify_cmd>" [workdir]   queue a new loop (ad-hoc)
+  nloop tasks                                   list the tasks in the registry
+  nloop run <task> [k=v ...]                    trigger a task with a payload
+  nloop ls [--task X] [--status X]              list runs + status + cost
+  nloop show <run_id>                           run detail + iterations
+  nloop stop <run_id>                           request a stop
+  nloop schedules                               list schedules + status
+  nloop trigger <schedule>                      run a schedule's pipeline right now
+  nloop ask "<question>" [--role X]             one-shot Q&A (read-only, no server needed)
+  nloop ws                                      list workspaces (tenants)
 
-Server dibaca dari config.yaml (section server). Override: NLOOP_URL.
-Workspace: NLOOP_WORKSPACE=jetorbit nloop ls  (kosong = workspace primary).
+The server is read from config.yaml (the server section). Override: NLOOP_URL.
+Workspace: NLOOP_WORKSPACE=jetorbit nloop ls  (empty = the primary workspace).
 """
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ def base_url() -> str:
 
 
 def api(method: str, path: str, body: dict | None = None):
-    # Semua request di-scope ke workspace kalau NLOOP_WORKSPACE diset; kosong =
-    # workspace primary (perilaku lama).
+    # Every request is scoped to a workspace when NLOOP_WORKSPACE is set; empty =
+    # the primary workspace (the old behavior).
     ws = os.environ.get("NLOOP_WORKSPACE", "").strip()
     if ws and path.startswith("/api/"):
         path += ("&" if "?" in path else "?") + "workspace=" + urllib.parse.quote(ws)
@@ -57,7 +57,7 @@ def api(method: str, path: str, body: dict | None = None):
         print(f"HTTP {e.code}: {e.read().decode()[:500]}", file=sys.stderr)
         sys.exit(1)
     except urllib.error.URLError as e:
-        print(f"server nggak kejangkau ({e.reason}) — nloop jalan? cek ./run.sh",
+        print(f"can't reach the server ({e.reason}) — is nloop running? check ./run.sh",
               file=sys.stderr)
         sys.exit(1)
 
@@ -75,24 +75,24 @@ def cmd_new(args: list[str]) -> None:
 def cmd_tasks(_args: list[str]) -> None:
     items = api("GET", "/api/tasks")
     if not items:
-        print("(registry kosong — isi `tasks:` di config.yaml atau tasks/<id>.yaml)")
+        print("(registry is empty — fill in `tasks:` in config.yaml or tasks/<id>.yaml)")
         return
     for t in items:
         req = ",".join(t.get("required") or []) or "-"
         last = t.get("last_run")
-        tail = f"  terakhir: {last['status']} ({last['id']})" if last else ""
+        tail = f"  last: {last['status']} ({last['id']})" if last else ""
         kind = "" if t.get("triggerable") else "  [built-in]"
         print(f"{t['id']:<20} payload: {req:<24} {t.get('name', '')}{kind}{tail}")
 
 
 def cmd_run(args: list[str]) -> None:
-    """nloop run <task> slot=pagi n=3 — value dicoba di-parse JSON dulu (angka/bool)."""
+    """nloop run <task> slot=pagi n=3 — values are parsed as JSON first (numbers/bools)."""
     if not args:
         die('usage: nloop run <task> [key=value ...]')
     task, payload = args[0], {}
     for pair in args[1:]:
         if "=" not in pair:
-            die(f"payload harus key=value: {pair}")
+            die(f"payload must be key=value: {pair}")
         k, v = pair.split("=", 1)
         try:
             payload[k] = json.loads(v)
@@ -100,8 +100,8 @@ def cmd_run(args: list[str]) -> None:
             payload[k] = v
     out = api("POST", f"/api/tasks/{task}/trigger", {"payload": payload})
     if out.get("deduped"):
-        print(f"run {out['run_id']} masih aktif buat key '{out['idempotency_key']}' "
-              "— nggak bikin run baru")
+        print(f"run {out['run_id']} is still active for key '{out['idempotency_key']}' "
+              "— not creating a new run")
     else:
         print(f"run {out['run_id']} queued  task={task}  workdir={out['workdir']}")
 
@@ -112,7 +112,7 @@ def cmd_ls(args: list[str]) -> None:
         if flag in args:
             i = args.index(flag)
             if i + 1 >= len(args):
-                die(f"{flag} butuh nilai")
+                die(f"{flag} needs a value")
             q.append(f"{key}={args[i + 1]}")
     path = "/api/loops" + ("?" + "&".join(q) if q else "")
     for r in api("GET", path):
@@ -132,17 +132,17 @@ def cmd_stop(args: list[str]) -> None:
     if not args:
         die("usage: nloop stop <run_id>")
     api("POST", f"/api/loops/{args[0]}/stop")
-    print(f"stop diminta buat {args[0]}")
+    print(f"stop requested for {args[0]}")
 
 
 def cmd_schedules(_args: list[str]) -> None:
     scheds = api("GET", "/api/schedules")
     if not scheds:
-        print("(nggak ada schedule di config.yaml)")
+        print("(no schedules in config.yaml)")
         return
     for name, s in scheds.items():
         when = s["at"] and f'at {s["at"]} UTC' or f'every {s["every"]}'
-        active = f"  AKTIF: {s['active_run']}" if s.get("active_run") else ""
+        active = f"  ACTIVE: {s['active_run']}" if s.get("active_run") else ""
         print(f"{name}  {when}  {s['steps']} step{active}")
 
 
@@ -153,15 +153,15 @@ def cmd_trigger(args: list[str]) -> None:
 
 
 def cmd_ask(args: list[str]) -> None:
-    """Q&A one-shot read-only — langsung spawn claude, nggak lewat server/queue
-    (pola `dtc ask`): grounding role + context_cmd tetap kepakai."""
+    """One-shot read-only Q&A — spawns claude directly, no server/queue involved
+    (the `dtc ask` pattern): role grounding + context_cmd still apply."""
     role = None
     if "--role" in args:
         i = args.index("--role")
         role = args[i + 1] if i + 1 < len(args) else None
         args = args[:i] + args[i + 2:]
     if not args:
-        die('usage: nloop ask "<pertanyaan>" [--role X]')
+        die('usage: nloop ask "<question>" [--role X]')
 
     import asyncio
     from engine import claude_cli, config, grounding
@@ -180,7 +180,7 @@ def cmd_ask(args: list[str]) -> None:
             lock_file=cfg["claude"].get("lock_file"),
         )
         if not res.ok:
-            die(f"claude gagal: {res.subtype} {res.stderr_tail[-300:]}")
+            die(f"claude failed: {res.subtype} {res.stderr_tail[-300:]}")
         print(res.result_text)
         print(f"\n[cost ${res.cost_usd:.4f}, {res.num_turns} turns]", file=sys.stderr)
 
@@ -188,12 +188,12 @@ def cmd_ask(args: list[str]) -> None:
 
 
 def cmd_ws(_args: list[str]) -> None:
-    """Daftar workspace. Pilih pakai env: NLOOP_WORKSPACE=jetorbit nloop ls"""
+    """List workspaces. Pick one with the env var: NLOOP_WORKSPACE=jetorbit nloop ls"""
     body = api("GET", "/api/workspaces")
     active = os.environ.get("NLOOP_WORKSPACE", "").strip() or body["primary"]
     for w in body["workspaces"]:
         mark = "*" if w["name"] == active else " "
-        tail = f"  {w['active']} aktif" if w.get("active") else ""
+        tail = f"  {w['active']} active" if w.get("active") else ""
         print(f"{mark} {w['name']:<16} {w['tasks']} task · {w['schedules']} schedule"
               f" · {len(w['projects'])} project{tail}")
 
@@ -214,7 +214,7 @@ def main() -> None:
         return
     fn = COMMANDS.get(sys.argv[1])
     if fn is None:
-        die(f"unknown command: {sys.argv[1]} (coba: nloop help)")
+        die(f"unknown command: {sys.argv[1]} (try: nloop help)")
     fn(sys.argv[2:])
 
 

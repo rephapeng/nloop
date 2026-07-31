@@ -1,5 +1,5 @@
-// Halaman Runs: tabel run + filter (status/task/cari) + form loop ad-hoc.
-// Filter disimpan di query URL biar tautannya bisa di-share / di-bookmark.
+// Runs page: the run table + filters (status/task/search) + the ad-hoc loop form.
+// Filters live in the URL query so a view stays shareable / bookmarkable.
 'use strict';
 
 const STATUSES = ['running', 'queued', 'succeeded', 'failed', 'stopped'];
@@ -14,7 +14,7 @@ function readFilters() {
 
 function writeFilters() {
   const p = new URLSearchParams();
-  if (WS) p.set('ws', WS);          // jangan ilang pas filter ditulis ulang
+  if (WS) p.set('ws', WS);          // don't lose it when the filters are rewritten
   for (const [k, v] of Object.entries(filters)) if (v) p.set(k, v);
   const qs = p.toString();
   history.replaceState(null, '', qs ? `/?${qs}` : '/');
@@ -29,11 +29,11 @@ function renderFilterBar() {
     </div>
     <span class="spacer"></span>
     <select id="f-task" class="select">
-      <option value="">semua task</option>
+      <option value="">all tasks</option>
       ${taskOptions.map((t) => `<option value="${esc(t)}" ${
         filters.task === t ? 'selected' : ''}>${esc(t)}</option>`).join('')}
     </select>
-    <input id="f-q" class="search" placeholder="cari goal / run id…"
+    <input id="f-q" class="search" placeholder="search goal / run id…"
            value="${esc(filters.q)}">`;
 
   $$('#filters .pill').forEach((b) => b.addEventListener('click', () => {
@@ -45,7 +45,7 @@ function renderFilterBar() {
   });
   const q = $('#f-q');
   let typing = null;
-  q.addEventListener('input', () => {          // debounce: jangan nembak API tiap ketikan
+  q.addEventListener('input', () => {          // debounce: don't hit the API on every keystroke
     filters.q = q.value;
     writeFilters();
     clearTimeout(typing);
@@ -87,7 +87,7 @@ function runRow(r) {
     </tr>`;
 }
 
-/** Update sel yang berubah aja, tanpa bongkar <tr>-nya. */
+/** Update only the cells that changed, without tearing down the <tr>. */
 function updateRow(tr, r) {
   if (!tr) return;
   const set = (c, html) => {
@@ -104,15 +104,15 @@ function updateRow(tr, r) {
   if (!cell) return;
   const nums = `<b>${r.iterations_done}</b>/${r.max_iterations}`;
   if (cell.querySelector('.nums').innerHTML !== nums) cell.querySelector('.nums').innerHTML = nums;
-  // bar-nya dipertahankan (bukan di-render ulang) supaya `transition: width` beneran jalan
+  // the bar is kept (not re-rendered) so that `transition: width` actually plays
   const bar = cell.querySelector('.bar');
   bar.className = `bar ${barCls(r)}`.trim();
   bar.querySelector('i').style.width = iterPct(r) + '%';
 }
 
-// Polling tiap 3 detik dulu nulis ulang innerHTML seluruh tbody: bar progres nggak
-// pernah sempat transisi, hover ke-reset, dan teks yang lagi diblok ilang. Sekarang
-// DOM cuma dibongkar kalau daftar run-nya emang beda.
+// The 3-second poll used to rewrite the whole tbody's innerHTML: the progress bar
+// never got to transition, hover state reset, and selected text vanished. Now the
+// DOM is only torn down when the list of runs genuinely differs.
 let painted = null;
 
 function paintRows(runs) {
@@ -124,9 +124,9 @@ function paintRows(runs) {
   }
   painted = ids;
   tb.innerHTML = runs.length ? runs.map(runRow).join('')
-    : `<tr><td colspan="8"><div class="empty">Belum ada run yang cocok.<br>
-       Bikin lewat <b>＋ New loop</b>, halaman <a href="/tasks">Tasks</a>,
-       CLI <code>bin/nloop run</code>, schedule, webhook, atau Telegram.</div></td></tr>`;
+    : `<tr><td colspan="8"><div class="empty">No runs match yet.<br>
+       Start one from <b>＋ New loop</b>, the <a href="/tasks">Tasks</a> page,
+       the <code>bin/nloop run</code> CLI, a schedule, a webhook, or Telegram.</div></td></tr>`;
   revealChildren(tb, ':scope > tr');
 }
 
@@ -165,7 +165,7 @@ function initForm() {
     f.hidden = !f.hidden;
     if (f.hidden) return;
     f.classList.remove('opening');
-    void f.offsetWidth;                 // reflow: paksa animasi mulai ulang tiap dibuka
+    void f.offsetWidth;                 // reflow: force the animation to restart on each open
     f.classList.add('opening');
     f.querySelector('[name=goal]').focus();
   });

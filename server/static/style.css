@@ -1,8 +1,8 @@
-/* nloop dashboard — dark-first, tanpa framework.
-   Token ada di :root (lihat DESIGN.md di root repo). Jangan tulis hex literal
-   di rule manapun — semua warna/durasi/easing ambil dari var() di bawah ini. */
+/* nloop dashboard — dark-first, no framework.
+   Tokens live in :root (see DESIGN.md at the repo root). Never write a hex literal
+   in a rule — every color/duration/easing comes from a var() defined below. */
 :root {
-  /* --- warna --- */
+  /* --- color --- */
   --bg: #0b0d12;
   --surface: #12151c;
   --surface-2: #181c26;
@@ -21,10 +21,10 @@
   --amber-soft: rgba(210, 153, 34, 0.14);
   --purple: #a371f7;
   --purple-soft: rgba(163, 113, 247, 0.14);
-  --on-accent: #ffffff;            /* teks di atas --accent (badge live, tombol primary) */
-  --hatch: rgba(255, 255, 255, 0.22);  /* arsir span durasi taksiran */
+  --on-accent: #ffffff;            /* text on top of --accent (live badge, primary button) */
+  --hatch: rgba(255, 255, 255, 0.22);  /* hatching for spans with an estimated duration */
 
-  /* --- bentuk & elevasi --- */
+  /* --- shape & elevation --- */
   --mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
   --radius: 10px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 8px 24px rgba(0, 0, 0, 0.25);
@@ -37,8 +37,8 @@
   --dur-fast: 110ms;
   --dur: 180ms;
   --dur-slow: 480ms;
-  --lift: -2px;                    /* seberapa jauh elemen naik pas hover */
-  --stagger: 55ms;                 /* jeda antar item di grid/tabel pas reveal */
+  --lift: -2px;                    /* how far an element rises on hover */
+  --stagger: 55ms;                 /* delay between grid/table items during reveal */
 }
 @media (prefers-color-scheme: light) {
   :root {
@@ -65,7 +65,7 @@ a:hover { text-decoration: underline; }
 code, .mono { font-family: var(--mono); font-size: 0.88em; }
 ::selection { background: var(--accent-soft); }
 
-/* Fokus keyboard kelihatan di semua kontrol — hover doang nggak cukup. */
+/* Keyboard focus is visible on every control — hover alone isn't enough. */
 :where(a, button, input, textarea, select, summary, [data-goto], [data-span]):focus-visible {
   outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent);
   outline-offset: 2px; border-radius: 8px;
@@ -73,8 +73,8 @@ code, .mono { font-family: var(--mono); font-size: 0.88em; }
 
 
 /* ---------- motion: scroll reveal ---------- */
-/* Digate `html.motion` (dipasang inline script di <head>): tanpa JS semua konten
-   tetap kelihatan, nggak ada risiko dashboard blank gara-gara animasi. */
+/* Gated on `html.motion` (set by an inline script in <head>): with no JS every
+   piece of content still shows — animation can never blank out the dashboard. */
 html.motion .reveal { opacity: 0; }
 html.motion .reveal.in {
   opacity: 1;
@@ -85,8 +85,8 @@ html.motion .reveal.in {
   from { opacity: 0; transform: translateY(12px); }
   to   { opacity: 1; transform: none; }
 }
-/* fill-mode `backwards` (bukan forwards) disengaja: begitu animasi kelar,
-   transform balik ke milik elemen sendiri — jadi lift pas hover tetap jalan. */
+/* fill-mode `backwards` (not forwards) is deliberate: once the animation ends the
+   transform reverts to the element's own — so the hover lift keeps working. */
 
 @media (prefers-reduced-motion: reduce) {
   html.motion .reveal, html.motion .reveal.in { opacity: 1; animation: none; }
@@ -97,7 +97,7 @@ html.motion .reveal.in {
 }
 
 
-/* ---------- shell: sidebar + konten ---------- */
+/* ---------- shell: sidebar + content ---------- */
 body { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
 .sidebar {
   position: sticky; top: 0; height: 100vh; overflow-y: auto;
@@ -133,7 +133,7 @@ body { display: grid; grid-template-columns: 232px 1fr; min-height: 100vh; }
 .nav-item .ico { transition: transform var(--dur) var(--ease-out); }
 .nav-item:hover .ico { transform: scale(1.18); }
 
-/* switcher workspace (tenant) — di bawah brand, di atas nav */
+/* workspace (tenant) switcher — below the brand, above the nav */
 .ws-switch { padding: 0 0.6rem 0.6rem; }
 .ws-switch .select { width: 100%; font-size: 0.8rem; }
 .ws-switch .ws-one { display: block; padding: 0.3rem 0.35rem; font-size: 0.78rem;
@@ -249,7 +249,7 @@ h2.sect::after { content: ""; flex: 1; height: 1px; background: var(--border); }
 .chip.task { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 35%, transparent); background: var(--amber-soft); }
 a.chip:hover { text-decoration: none; transform: translateY(-1px); box-shadow: var(--shadow-sm); }
 
-/* progress bar mini */
+/* mini progress bar */
 .bar {
   width: 110px; height: 5px; border-radius: 999px; background: var(--surface-2);
   border: 1px solid var(--border); overflow: hidden;
@@ -326,7 +326,7 @@ details.advanced[open] > *:not(summary) { animation: nl-rise 0.28s var(--ease-ou
 .sched-row .when { color: var(--muted); font-size: 0.82rem; }
 .sched-row .spacer { flex: 1; }
 
-/* alur step tick terakhir (mis. promo-pagi: task -> report) */
+/* step flow of the last tick (e.g. promo-pagi: task -> report) */
 .sched-flow { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; }
 .sched-flow .arrow { color: var(--faint); font-size: 0.8rem; }
 .chip.step { font-size: 0.76rem; padding: 0.22rem 0.6rem; text-decoration: none; }
@@ -371,7 +371,7 @@ details.advanced[open] > *:not(summary) { animation: nl-rise 0.28s var(--ease-ou
 .ev.warn { border-color: var(--amber); color: var(--amber); background: var(--amber-soft); }
 .ev.status, .ev.result { border-color: var(--border-strong); color: var(--muted); }
 
-/* tombol "lompat ke bawah" — muncul cuma pas user lagi scroll ke atas baca log */
+/* "jump to bottom" button — only shows while the user has scrolled up to read */
 .log-wrap { position: relative; }
 .jump-live {
   position: absolute; right: 1rem; bottom: 0.9rem; z-index: 2;
@@ -382,7 +382,7 @@ details.advanced[open] > *:not(summary) { animation: nl-rise 0.28s var(--ease-ou
 }
 .jump-live[hidden] { display: none; }
 
-/* timeline iterasi */
+/* iteration timeline */
 .iter { margin-bottom: 0.55rem; overflow: hidden; }
 .iter summary {
   display: flex; align-items: center; gap: 0.8rem; flex-wrap: wrap;
@@ -436,7 +436,7 @@ details.advanced[open] > *:not(summary) { animation: nl-rise 0.28s var(--ease-ou
 .search { width: 230px; }
 .select:focus, .search:focus { outline: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); outline-offset: -1px; }
 
-/* ---------- tabel ---------- */
+/* ---------- tables ---------- */
 .table-wrap { overflow-x: auto; }
 .tbl { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
 .tbl th {
@@ -513,7 +513,7 @@ details.advanced[open] > *:not(summary) { animation: nl-rise 0.28s var(--ease-ou
     var(--hatch) 0 4px, transparent 4px 8px);
   opacity: 0.72;
 }
-/* bar tumbuh dari kiri pas waterfall pertama kali digambar */
+/* bars grow from the left when the waterfall is first drawn */
 html.motion .waterfall-wrap.first-paint .span-bar { animation: nl-grow 0.5s var(--ease-out) backwards; }
 @keyframes nl-grow { from { transform: scaleX(0); } to { transform: none; } }
 .span-bar { transform-origin: left center; }

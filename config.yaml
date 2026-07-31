@@ -1,34 +1,34 @@
-# nloop config — LEVEL PROSES. Semua nilai punya default di engine/config.py.
+# nloop config — PROCESS LEVEL. Every value has a default in engine/config.py.
 #
-# Yang per-tenant (tasks, schedules, triggers, watchdog, telegram, promo_report)
-# pindah ke workspaces/<nama>/config.yaml — lihat engine/workspaces.py. Config di
-# sini jadi dasar buat SEMUA workspace; workspace boleh nimpa section apa pun
-# kecuali `server`.
+# The per-tenant stuff (tasks, schedules, triggers, watchdog, telegram, promo_report)
+# lives in workspaces/<name>/config.yaml — see engine/workspaces.py. The config here
+# is the base for ALL workspaces; a workspace may override any section
+# except `server`.
 server:
-  host: 0.0.0.0     # akses via tailscale; dashboard BELUM ada auth — jangan expose ke internet publik
+  host: 0.0.0.0     # accessed over tailscale; the dashboard has NO auth yet — don't expose it to the public internet
   port: 8484
 
 loops:
-  max_concurrent: 2        # semaphore: tiap loop = pohon subprocess claude.
-                           # SATU queue buat semua workspace — resource-nya emang satu.
+  max_concurrent: 2        # semaphore: every loop is a tree of claude subprocesses.
+                           # ONE queue for all workspaces — there's only one pool of resources.
   max_iterations: 10
   max_cost_usd: 5.0
   iteration_timeout_sec: 900
-  poll_interval_sec: 1.0   # worker polling queue
-  max_no_progress: 2       # verifier output identik N kali beruntun -> stop (anti muter-muter)
-  budget_warn_ratio: 0.8   # event warning saat cost nyentuh 80% budget
+  poll_interval_sec: 1.0   # worker queue polling
+  max_no_progress: 2       # identical verifier output N times in a row -> stop (anti going in circles)
+  budget_warn_ratio: 0.8   # warning event once cost hits 80% of the budget
 
 claude:
-  model: null              # null = default model CLI (subscription)
+  model: null              # null = the CLI's default model (subscription)
   max_turns: 50
   allowed_tools: "Bash,Read,Edit,Write,Glob,Grep"
   permission_mode: acceptEdits
-  retries: 1                  # retry dalam-iterasi buat error transient
-  max_consecutive_errors: 2   # iterasi error beruntun -> fail run
-  lock_file: null             # single-flight LINTAS proses (flock). Share subscription
-                              # dengan agent lain di box? samain file-nya, mis.
+  retries: 1                  # in-iteration retry for transient errors
+  max_consecutive_errors: 2   # consecutive erroring iterations -> fail the run
+  lock_file: null             # CROSS-process single-flight (flock). Sharing the subscription
+                              # with another agent on this box? point both at the same file, e.g.
                               # /opt/dtc-agent/.claude.lock
-  gate_max_turns: 15          # LLM quality gate (reviewer read-only)
+  gate_max_turns: 15          # LLM quality gate (read-only reviewer)
   gate_allowed_tools: "Read,Grep,Glob"
 
 memory:
@@ -36,9 +36,9 @@ memory:
 
 paths:
   db: nloop.db
-  workspaces: workspaces   # config tenant: workspaces/<nama>/config.yaml
-  scratch: .scratch        # workdir sekali pakai buat run tanpa workdir sendiri
-  roles: roles             # roles/<nama>.md + roles/common.md (system prompt).
-                           # Workspace bisa punya sendiri: workspaces/<nama>/roles/
-  tasks: tasks             # tasks/<id>.yaml global; per workspace:
-                           # workspaces/<nama>/tasks/<id>.yaml
+  workspaces: workspaces   # tenant config: workspaces/<name>/config.yaml
+  scratch: .scratch        # throwaway workdir for runs without a workdir of their own
+  roles: roles             # roles/<name>.md + roles/common.md (system prompt).
+                           # A workspace can have its own: workspaces/<name>/roles/
+  tasks: tasks             # tasks/<id>.yaml globally; per workspace:
+                           # workspaces/<name>/tasks/<id>.yaml

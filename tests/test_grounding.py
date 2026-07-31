@@ -1,4 +1,4 @@
-"""Roles + grounding (context_cmd) → system prompt (port run_claude.sh dtc)."""
+"""Roles + grounding (context_cmd) → system prompt (port of dtc's run_claude.sh)."""
 import asyncio
 
 import pytest
@@ -36,28 +36,29 @@ def test_empty_sources_give_none(cfg):
 
 
 def test_common_role_and_context_combined(cfg, tmp_path):
-    write_role(cfg, "common", "ATURAN BERSAMA")
-    write_role(cfg, "writer", "kamu penulis")
-    sp = build(cfg, role="writer", context_cmd="echo GROUNDING-SEGAR",
+    write_role(cfg, "common", "SHARED RULES")
+    write_role(cfg, "writer", "you are a writer")
+    sp = build(cfg, role="writer", context_cmd="echo FRESH-GROUNDING",
                workdir=str(tmp_path))
-    assert sp.index("ATURAN BERSAMA") < sp.index("GROUNDING-SEGAR") < sp.index("kamu penulis")
+    assert (sp.index("SHARED RULES") < sp.index("FRESH-GROUNDING")
+            < sp.index("you are a writer"))
     assert "===== INJECTED GROUNDING (context_cmd) =====" in sp
     assert "===== ROLE =====" in sp
 
 
 def test_context_cmd_failure_not_fatal(cfg, tmp_path):
-    sp = build(cfg, context_cmd="echo duar; exit 3", workdir=str(tmp_path))
-    assert "[context_cmd exit 3]" in sp and "duar" in sp
+    sp = build(cfg, context_cmd="echo boom; exit 3", workdir=str(tmp_path))
+    assert "[context_cmd exit 3]" in sp and "boom" in sp
 
 
 def test_context_output_capped(cfg, tmp_path):
     sp = build(cfg, context_cmd="yes x | head -c 50000", workdir=str(tmp_path))
     assert len(sp) < 30000
-    assert "grounding dipotong di cap" in sp
+    assert "grounding truncated at the cap" in sp
 
 
 def test_loop_injects_system_prompt(monkeypatch, cfg, tmp_path):
-    """Run dengan role+context_cmd → claude_cli.run dapet system_prompt gabungan."""
+    """A run with role+context_cmd → claude_cli.run gets the combined system_prompt."""
     write_role(cfg, "fixer", "PERSONA-FIXER")
     captured = {}
 

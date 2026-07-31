@@ -1,8 +1,8 @@
-"""Acceptance Fase 1: verifier + adapter claude -p (subscription-safe).
+"""Fase 1 acceptance: the verifier + the claude -p adapter (subscription-safe).
 
 Usage:
-    python scripts/smoke.py                 # verifier only (gratis)
-    python scripts/smoke.py --with-claude   # + spawn 1x `claude -p` beneran
+    python scripts/smoke.py                 # verifier only (free)
+    python scripts/smoke.py --with-claude   # + spawn one real `claude -p`
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ async def main() -> None:
     assert v.passed and v.exit_code == 0, v
     v = await verifier.verify("echo boom; exit 3", cwd=".")
     assert not v.passed and v.exit_code == 3 and "boom" in v.output, v
-    print("verifier: OK (exit 0 → pass, exit 3 → fail, output kebaca)")
+    print("verifier: OK (exit 0 → pass, exit 3 → fail, output captured)")
 
     if "--with-claude" in sys.argv:
         events: list[str] = []
@@ -36,9 +36,9 @@ async def main() -> None:
             f"turns={res.num_turns} session={res.session_id} events={events}"
         )
         print(f"claude text: {res.result_text[:100]!r}")
-        assert res.ok, f"claude -p gagal: {res.subtype} / {res.stderr_tail[-500:]}"
-        assert res.session_id, "session_id kosong"
-        print("claude adapter: OK (jalan tanpa ANTHROPIC_API_KEY → subscription)")
+        assert res.ok, f"claude -p failed: {res.subtype} / {res.stderr_tail[-500:]}"
+        assert res.session_id, "session_id is empty"
+        print("claude adapter: OK (ran without ANTHROPIC_API_KEY → subscription)")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
-// Halaman Tasks (daftar) + Task detail (spec + form "Test task" + run terakhir).
-// Satu file, dua halaman — dipilih lewat <body data-page>.
+// Tasks page (list) + Task detail (spec + "Test task" form + recent runs).
+// One file, two pages — picked via <body data-page>.
 'use strict';
 
 function taskCard(t) {
@@ -20,7 +20,7 @@ function taskCard(t) {
         <span class="faint">payload: ${req}</span>
         <span class="spacer"></span>
         ${last ? `${badge(last.status)}<span class="faint">${timeAgo(last.created_at)}</span>`
-               : '<span class="faint">belum pernah jalan</span>'}
+               : '<span class="faint">never run</span>'}
       </div>
     </a>`;
 }
@@ -31,9 +31,9 @@ async function initTasks() {
     items = await api('/api/tasks');
   } catch (e) { return showError(e.message); }
   $('#tasks').innerHTML = items.length ? items.map(taskCard).join('')
-    : `<div class="empty">Registry masih kosong.<br>
-       Bikin <code>tasks/&lt;id&gt;.yaml</code> (atau isi <code>tasks:</code> di
-       <code>config.yaml</code>) — kebaca sendiri, nggak usah restart nloop.</div>`;
+    : `<div class="empty">The registry is empty.<br>
+       Create <code>tasks/&lt;id&gt;.yaml</code> (or fill in <code>tasks:</code> in
+       <code>config.yaml</code>) — it's picked up automatically, no nloop restart.</div>`;
   revealChildren($('#tasks'));
 }
 
@@ -48,23 +48,23 @@ function specRow(label, value, mono) {
 function payloadForm(t) {
   const keys = [...new Set([...(t.required || []), ...Object.keys(t.defaults || {})])];
   if (t.triggerable === false) {
-    return `<div class="hint-box">Task bawaan (dipicu webhook/watchdog) — nggak bisa
-            di-trigger manual dari sini.</div>`;
+    return `<div class="hint-box">Built-in task (fired by webhook/watchdog) — can't be
+            triggered manually from here.</div>`;
   }
   return `
     <form id="test-form">
       ${keys.length ? `<div class="grid">${keys.map((k) => `
         <label class="field">${esc(k)}
-          ${(t.required || []).includes(k) ? '<span class="hint">— wajib</span>' : ''}
+          ${(t.required || []).includes(k) ? '<span class="hint">— required</span>' : ''}
           <input name="p-${esc(k)}" value="${esc((t.defaults || {})[k] ?? '')}"
                  ${(t.required || []).includes(k) ? 'required' : ''}>
         </label>`).join('')}</div>`
-      : '<p class="faint">Task ini nggak butuh payload.</p>'}
+      : '<p class="faint">This task needs no payload.</p>'}
       <details class="advanced">
-        <summary>Payload tambahan (JSON) + override limit</summary>
+        <summary>Extra payload (JSON) + limit overrides</summary>
         <div class="grid">
           <label class="field full">Extra payload (JSON object)
-            <textarea name="extra" rows="2" placeholder='{"catatan": "sekali jalan"}'></textarea>
+            <textarea name="extra" rows="2" placeholder='{"note": "one-off"}'></textarea>
           </label>
           <label class="field">Max iterations
             <input name="max_iterations" type="number" min="1"
@@ -100,7 +100,7 @@ function bindTestForm(taskId) {
       try {
         Object.assign(payload, JSON.parse(f.get('extra')));
       } catch {
-        $('#test-msg').textContent = 'extra payload bukan JSON valid';
+        $('#test-msg').textContent = 'extra payload is not valid JSON';
         return;
       }
     }
@@ -110,7 +110,7 @@ function bindTestForm(taskId) {
       const out = await postJSON(`/api/tasks/${taskId}/trigger`, body);
       if (out.deduped) {
         $('#test-msg').innerHTML = `run <a href="/run/${esc(out.run_id)}">${
-          esc(out.run_id)}</a> dengan key yang sama masih aktif — nggak bikin baru`;
+          esc(out.run_id)}</a> with the same key is still active — no new run created`;
         return;
       }
       location.href = `/run/${out.run_id}`;
@@ -141,7 +141,7 @@ async function initTaskDetail() {
   try {
     t = await api(`/api/tasks/${encodeURIComponent(taskId)}`);
   } catch (e) {
-    return showError(`task '${taskId}' nggak ketemu (${e.message})`);
+    return showError(`task '${taskId}' not found (${e.message})`);
   }
   $('#task-name').textContent = t.name || t.id;
   $('#task-desc').textContent = t.description || '';
@@ -165,9 +165,9 @@ async function initTaskDetail() {
 
   const runs = t.runs || [];
   $('#task-runs').innerHTML = runs.length ? runs.map(runRowMini).join('')
-    : '<tr><td colspan="7"><div class="empty">Belum ada run buat task ini.</div></td></tr>';
+    : '<tr><td colspan="7"><div class="empty">No runs for this task yet.</div></td></tr>';
   revealChildren($('#task-runs'), ':scope > tr');
-  reveal();                     // panel spec & form baru keisi — amati ulang
+  reveal();                     // spec panel & form just got filled — observe again
   document.addEventListener('click', (e) => {
     const row = e.target.closest('#task-runs [data-goto]');
     if (row) location.href = row.dataset.goto;

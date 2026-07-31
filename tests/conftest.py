@@ -10,13 +10,13 @@ from engine import config  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def isolate_paths(tmp_path, monkeypatch):
-    """Test JANGAN nyentuh direktori beneran di repo.
+    """Tests must NEVER touch the real directories in the repo.
 
-    `paths.workspaces` sekarang direktori config tenant — kalau dibiarin default
-    ("workspaces"), tiap create_app() di test bakal ngeload workspace produksi
-    (onecookie/jetorbit): scheduler & watchdog beneran nyala, project webhook
-    ketuker, dan test-nya jadi lambat + bohong. `paths.scratch` juga diarahin ke
-    tmp biar nggak ninggalin sampah workdir.
+    `paths.workspaces` is the tenant config directory now — left at its default
+    ("workspaces"), every create_app() in a test would load the production
+    workspaces (onecookie/jetorbit): the real scheduler & watchdog spin up,
+    webhook projects get mixed up, and the tests turn slow + lying.
+    `paths.scratch` is pointed at tmp too so we don't leave workdir junk behind.
     """
     monkeypatch.setitem(config.DEFAULTS["paths"], "workspaces",
                         str(tmp_path / "wscfg"))

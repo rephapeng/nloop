@@ -1,31 +1,31 @@
-"""Trace: runs + iterations + events → pohon span buat waterfall dashboard (Fase 12).
+"""Trace: runs + iterations + events → the span tree for the dashboard waterfall (Fase 12).
 
-Dashboard lama nampilin event sebagai log append-only — kelihatan APA yang terjadi,
-tapi nggak kelihatan BERAPA LAMA tiap fase dan mana yang jadi bottleneck. Modul ini
-nyusun ulang data yang udah ada jadi span berdurasi, ala trace trigger.dev:
+The old dashboard showed events as an append-only log — you could see WHAT happened,
+but not HOW LONG each phase took or where the bottleneck was. This module reshapes
+data that was already being written into spans with durations, trigger.dev style:
 
     run
-    └── iterasi 1
-        ├── verify        (durasi asli dari payload event; run lama: ditaksir)
-        ├── act           (durasi asli dari tabel iterations)
-        │   ├── tool Bash (ditaksir: sampai event berikutnya — stream cuma punya 1 ts)
+    └── iteration 1
+        ├── verify        (real duration from the event payload; legacy runs: estimated)
+        ├── act           (real duration from the iterations table)
+        │   ├── tool Bash (estimated: up to the next event — the stream has only 1 ts)
         │   └── tool Edit
         └── gate
 
-Prinsip: span yang durasinya DITAKSIR ditandai `approx: true` — frontend nge-render
-beda (bar samar) biar nggak keliatan lebih presisi dari kenyataannya.
+Principle: a span whose duration is ESTIMATED is flagged `approx: true` — the frontend
+renders it differently (a hatched bar) so the picture never looks more precise than it is.
 
-Pembagian event ke iterasi pakai jendela waktu dari tabel `iterations`
-(started_at/ended_at akurat), BUKAN hitung event `result` — satu iterasi bisa
-punya beberapa result kalau retry transient kejadian.
+Events are bucketed into iterations by the time windows from the `iterations` table
+(started_at/ended_at are accurate), NOT by counting `result` events — one iteration can
+emit several results when a transient retry happens.
 """
 from __future__ import annotations
 
 import time
 
-# event yang jadi span sendiri (sisanya: turn/init/log → marker atau diabaikan)
+# events that become spans of their own (the rest: turn/init/log → markers or ignored)
 _ACT_STATUS = {"success": "ok"}
-TOOL_CAP = 80   # tool span per iterasi; sisanya diringkas jadi satu span "+N lagi"
+TOOL_CAP = 80   # tool spans per iteration; the rest collapse into one "+N more" span
 
 
 def _span(span_id: str, parent: str | None, kind: str, name: str,
@@ -45,7 +45,7 @@ def _run_status(run: dict) -> str:
 
 def build(run: dict, iterations: list[dict], events: list[dict],
           now: float | None = None) -> dict:
-    """Return {start, end, spans[]} — spans urut waktu, parent duluan."""
+    """Return {start, end, spans[]} — spans in time order, parents first."""
     now = now or time.time()
     t0 = run.get("started_at") or run.get("created_at") or now
     t1 = run.get("ended_at") or now
@@ -76,8 +76,8 @@ def build(run: dict, iterations: list[dict], events: list[dict],
 
     if trailing:
         if run["status"] in ("queued", "running"):
-            # iterasi yang lagi jalan belum masuk tabel iterations (baris ditulis
-            # setelah ACT kelar) — tetap digambar biar live view nggak bolong.
+            # the in-flight iteration isn't in the iterations table yet (the row is
+            # written after ACT finishes) — draw it anyway so the live view has no hole.
             spans += _iteration_spans(len(windows) + 1, None, trailing, prev_end, now)
         else:
             spans += _final_spans(trailing, prev_end, now)
@@ -115,7 +115,7 @@ def _iteration_spans(idx: int, it: dict | None, evs: list[dict],
         elif typ == "tool":
             tool_evs.append(ev)
         elif typ == "init" and act_start is None:
-            act_start = ts        # iterasi berjalan: belum ada baris di tabel
+            act_start = ts        # iteration in flight: no table row yet
         elif typ == "result" and act_end is None:
             act_end = ts
         prev_ts = ts
@@ -135,28 +135,28 @@ def _iteration_spans(idx: int, it: dict | None, evs: list[dict],
         return []
     start = min(c["start"] for c in children)
     end = max(c["end"] for c in children)
-    # Warna iterasi ngikut hasil ACT-nya, BUKAN hasil verify: verify gagal di awal
-    # iterasi itu kondisi normal (justru itu alasan iterasi jalan). Gate nolak →
-    # warn: act-nya sukses tapi hasilnya ditolak reviewer.
+    # An iteration's colour follows its ACT outcome, NOT the verify result: a failing
+    # verify at the top of an iteration is the normal case (it's why the iteration runs
+    # at all). A gate rejection → warn: act succeeded but the reviewer turned it down.
     if it is None:
         status = "running"
     else:
         status = "ok" if (it.get("reason") or "") == "success" else "fail"
         if any(c["kind"] == "gate" and c["status"] == "fail" for c in children):
             status = "warn"
-    head = _span(parent, "run", "iteration", f"iterasi {idx}", start, end, status,
+    head = _span(parent, "run", "iteration", f"iteration {idx}", start, end, status,
                  detail={"verifier_passed": (it or {}).get("verifier_passed")})
     return [head] + children
 
 
 def _tool_spans(parent: str, tool_evs: list[dict], act_end: float,
                 now: float) -> list[dict]:
-    """Event tool cuma punya SATU timestamp (waktu tool_use muncul di stream).
-    Ujungnya ditaksir = tool berikutnya / akhir act → semua ditandai approx.
+    """A tool event carries only ONE timestamp (when tool_use appeared in the stream).
+    Its end is inferred as the next tool / the end of act → all flagged approx.
 
-    Iterasi panjang bisa punya ratusan tool call; digambar semua = waterfall
-    nggak kebaca. Dipotong di TOOL_CAP, sisanya DIBILANG (jangan diem-diem —
-    trace yang motong tanpa bilang kelihatan kayak trace yang lengkap).
+    A long iteration can hold hundreds of tool calls; drawing them all makes the
+    waterfall unreadable. It is capped at TOOL_CAP and the remainder is STATED
+    explicitly — a trace that truncates silently looks like a complete trace.
     """
     out = []
     shown = tool_evs[:TOOL_CAP]
@@ -171,15 +171,15 @@ def _tool_spans(parent: str, tool_evs: list[dict], act_end: float,
         rest = tool_evs[TOOL_CAP:]
         out.append(_span(
             f"{parent}.tool-rest", f"{parent}.act", "tool",
-            f"+{len(rest)} tool call lagi (nggak digambar)",
+            f"+{len(rest)} more tool calls (not drawn)",
             rest[0]["ts"], act_end, "", approx=True,
-            detail={"input": f"{len(rest)} tool call disembunyiin biar waterfall "
-                             f"kebaca — detail lengkapnya ada di panel Log."}))
+            detail={"input": f"{len(rest)} tool calls hidden to keep the waterfall "
+                             f"readable — the full detail is in the Log panel."}))
     return out
 
 
 def _final_spans(evs: list[dict], prev_end: float, now: float) -> list[dict]:
-    """Event setelah iterasi terakhir: verify final, gate final, postrun (rilis)."""
+    """Events after the last iteration: final verify, final gate, postrun (release)."""
     out, prev_ts = [], prev_end
     for i, ev in enumerate(evs):
         typ, ts, p = ev["type"], ev["ts"], ev.get("payload") or {}
@@ -196,7 +196,7 @@ def _final_spans(evs: list[dict], prev_end: float, now: float) -> list[dict]:
                              approx="duration" not in p,
                              detail={"reasons": p.get("reasons")}))
         elif typ == "postrun":
-            out.append(_span(f"final{i}", "run", "postrun", "rilis (on_success_cmd)",
+            out.append(_span(f"final{i}", "run", "postrun", "release (on_success_cmd)",
                              ts - _dur(p, ts, prev_ts), ts,
                              "ok" if p.get("ok") else "fail",
                              approx="duration" not in p,
@@ -206,7 +206,7 @@ def _final_spans(evs: list[dict], prev_end: float, now: float) -> list[dict]:
 
 
 def _dur(payload: dict, ts: float, prev_ts: float) -> float:
-    """Durasi asli kalau dicatat; run lama → taksir dari jarak ke event sebelumnya."""
+    """The real duration when recorded; legacy runs → estimate from the previous event."""
     d = payload.get("duration")
     if isinstance(d, (int, float)) and d >= 0:
         return float(d)

@@ -1,17 +1,18 @@
-"""Bot Telegram nloop — notif, kontrol loop, dan chat agent (port telegram_bot.py
-+ agent_run.sh dtc-agent, ditulis ulang async biar hidup di event loop nloop).
+"""nloop Telegram bot — notifications, loop control, and agent chat (port of
+telegram_bot.py + agent_run.sh from dtc-agent, rewritten async so it lives inside
+the nloop event loop).
 
-Kapabilitas:
-- Notif run selesai (succeeded/failed/stopped) ke semua chat di allow-list.
-- Kontrol: /loops, /status, /new, /stop, /reset — digate allow-list (fails closed).
-- Chat freeform → session Claude Code BENERAN per-chat (--resume, retry fresh
-  kalau session basi), tiering model (sapaan pendek → murah, substantif → gede
-  + thinking budget), foto/dokumen di-download ke incoming/ buat di-Read agent.
-- Redaksi secret di semua output keluar (defense-in-depth: token kecolongan
-  echo nggak boleh nyampe Telegram plaintext).
+Capabilities:
+- Run-finished notifications (succeeded/failed/stopped) to every chat in the allow-list.
+- Control: /loops, /status, /new, /stop, /reset — gated by the allow-list (fails closed).
+- Freeform chat → a REAL per-chat Claude Code session (--resume, fresh retry when
+  the session is stale), model tiering (short greeting → cheap, substantive → big
+  + thinking budget), photos/documents downloaded to incoming/ for the agent to Read.
+- Secret redaction on everything going out (defense-in-depth: a token that leaks
+  into an echo must never reach Telegram in plaintext).
 
-Secrets dari env / .env: TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_CHAT_IDS
-(comma-separated). JANGAN taruh di config.yaml (ke-commit).
+Secrets come from env / .env: TELEGRAM_BOT_TOKEN, TELEGRAM_ALLOWED_CHAT_IDS
+(comma-separated). DON'T put them in config.yaml (that gets committed).
 """
 from __future__ import annotations
 
@@ -29,9 +30,9 @@ from engine import claude_cli, config, grounding
 
 log = logging.getLogger("nloop.telegram")
 
-POLL_TIMEOUT = 50      # detik long-poll getUpdates
-TG_MAX = 3900          # cap chunk di bawah hard limit 4096 Telegram
-MAX_AUTO_CONTINUES = 2  # error_max_turns/timeout -> resume session yang sama N kali
+POLL_TIMEOUT = 50      # getUpdates long-poll seconds
+TG_MAX = 3900          # chunk cap below Telegram's hard 4096 limit
+MAX_AUTO_CONTINUES = 2  # error_max_turns/timeout -> resume the same session N times
 TERMINAL = ("succeeded", "failed", "stopped")
 SESSIONS_DIR = ".sessions"
 INCOMING_DIR = "incoming"
@@ -39,7 +40,7 @@ INCOMING_DIR = "incoming"
 STATUS_EMOJI = {"succeeded": "✅", "failed": "❌", "stopped": "⏹",
                 "running": "🔄", "queued": "⏳"}
 
-# ---- redaksi secret (port 1:1 dari dtc telegram_bot.py) ----------------------
+# ---- secret redaction (1:1 port from dtc telegram_bot.py) --------------------
 
 _SECRET_PATTERNS = [
     (re.compile(r"AKIA[0-9A-Z]{16}"), "AWS_ACCESS_KEY_ID"),
@@ -51,8 +52,8 @@ _SECRET_PATTERNS = [
     (re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"), "JWT"),
     (re.compile(r"Bearer\s+[A-Za-z0-9\-._~+/]{20,}=*"), "BEARER_TOKEN"),
     (re.compile(r"-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]+?-----END[ A-Z]*PRIVATE KEY-----"), "PRIVATE_KEY_BLOCK"),
-    # Heuristik berlabel: identifier yang MENGANDUNG key/token/secret/password diikuti
-    # nilai opaque panjang — nangkep token provider yang pola bernamanya nggak kenal.
+    # Labeled heuristic: an identifier that CONTAINS key/token/secret/password followed
+    # by a long opaque value — catches provider tokens whose naming pattern we don't know.
     (re.compile(
         r"(?i)\b([A-Za-z][A-Za-z0-9_-]*(?:key|token|secret|password|passwd|credential)[A-Za-z0-9_-]*\s*[:=]\s*)"
         r"[\"']?([A-Za-z0-9_\-/+.]{16,})[\"']?"
@@ -61,8 +62,8 @@ _SECRET_PATTERNS = [
 
 
 def redact_secrets(text: str) -> str:
-    """Mask substring berbentuk credential di teks keluar. Lebih baik over-redact
-    string opaque pendek ketimbang kelolosan secret beneran."""
+    """Mask credential-shaped substrings in outgoing text. Better to over-redact a
+    short opaque string than to let a real secret slip through."""
     def repl(m, label):
         if m.re.groups >= 2:
             return f"{m.group(1)}[REDACTED:{label}]"
@@ -73,7 +74,7 @@ def redact_secrets(text: str) -> str:
     return text
 
 
-# ---- markdown → Telegram HTML (port dari dtc, dipangkas) ---------------------
+# ---- markdown → Telegram HTML (ported from dtc, trimmed) ---------------------
 
 _CODE_BLOCK_RE = re.compile(r"```(?:[a-zA-Z0-9_+-]*\n)?(.*?)```", re.DOTALL)
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
@@ -88,7 +89,7 @@ _TAG_RE = re.compile(r"<[^>]+>")
 
 
 def _format_table(block_text: str) -> str | None:
-    """Tabel markdown → grid monospace rata (Telegram nggak punya <table>)."""
+    """Markdown table → aligned monospace grid (Telegram has no <table>)."""
     lines = [l.strip() for l in block_text.strip("\n").split("\n") if l.strip()]
     rows = []
     for i, line in enumerate(lines):
@@ -109,8 +110,8 @@ def _format_table(block_text: str) -> str | None:
 
 
 def md_to_tg_html(text: str) -> str:
-    """Best-effort markdown → HTML Telegram. Code span di-stash duluan biar
-    `*`/`_` di dalam code (mis. **kwargs) nggak kebaca sebagai emphasis."""
+    """Best-effort markdown → Telegram HTML. Code spans are stashed first so that
+    `*`/`_` inside code (e.g. **kwargs) doesn't get read as emphasis."""
     text = html.escape(text, quote=False)
 
     blocks: list[str] = []
@@ -149,7 +150,7 @@ def md_to_tg_html(text: str) -> str:
 
 
 def chunks(text: str):
-    """Pecah pesan di batas newline, cap TG_MAX (limit Telegram 4096)."""
+    """Split a message on newline boundaries, capped at TG_MAX (Telegram's 4096)."""
     text = text if text.strip() else "(no output)"
     while text:
         if len(text) <= TG_MAX:
@@ -162,7 +163,7 @@ def chunks(text: str):
         text = text[cut:]
 
 
-# ---- tiering model (port heuristik agent_run.sh) ------------------------------
+# ---- model tiering (agent_run.sh heuristic port) ------------------------------
 
 _SMALLTALK_RE = re.compile(
     r"^\s*(hai|halo|hallo|hi|hello|hey|yo|p|ping|test|tes|thanks|thx|makasih|mksh|"
@@ -170,15 +171,15 @@ _SMALLTALK_RE = re.compile(
 
 
 def pick_model(msg: str, tg_cfg: dict) -> tuple[str | None, int | None]:
-    """(model, thinking_tokens). Sapaan/ack pendek → tier murah tanpa thinking;
-    sisanya model utama + thinking budget. Override per-config."""
+    """(model, thinking_tokens). Short greeting/ack → cheap tier, no thinking;
+    everything else gets the main model + thinking budget. Overridable per-config."""
     lc = msg.strip().lower()
     if len(lc.split()) <= 4 and _SMALLTALK_RE.match(lc):
         return tg_cfg.get("model_smalltalk", "sonnet"), None
     return tg_cfg.get("model"), tg_cfg.get("thinking_tokens", 10000)
 
 
-# ---- konteks reply/forward (quoted context, BUKAN perintah) --------------------
+# ---- reply/forward context (quoted context, NOT a command) ---------------------
 
 def reply_context(msg: dict) -> str:
     r = msg.get("reply_to_message")
@@ -226,15 +227,15 @@ def forward_context(msg: dict) -> str:
 
 def env_names(tg_cfg: dict, workspace: str | None,
               primary: bool = False) -> tuple[str, str]:
-    """Nama env var token + allow-list buat satu workspace.
+    """Env var names for the token + allow-list of one workspace.
 
-    Satu bot per workspace: token Telegram NGGAK BISA di-share (dua getUpdates
-    dengan token sama = 409 Conflict dari Telegram). Workspace primary tetap
-    pakai nama lama (TELEGRAM_BOT_TOKEN) biar setup yang udah jalan nggak perlu
-    diubah; workspace lain dapat suffix, mis. TELEGRAM_BOT_TOKEN_JETORBIT.
-    Sengaja NGGAK ada fallback ke nama polos — dua workspace diam-diam pakai
-    token sama bakal saling nyolong update.
-    Bisa di-override eksplisit lewat `telegram.token_env` / `telegram.allowed_env`.
+    One bot per workspace: a Telegram token CAN'T be shared (two getUpdates with
+    the same token = 409 Conflict from Telegram). The primary workspace keeps the
+    old name (TELEGRAM_BOT_TOKEN) so setups that already run don't have to change;
+    other workspaces get a suffix, e.g. TELEGRAM_BOT_TOKEN_JETORBIT.
+    There is deliberately NO fallback to the bare name — two workspaces quietly
+    using the same token would steal each other's updates.
+    Can be overridden explicitly via `telegram.token_env` / `telegram.allowed_env`.
     """
     suffix = "" if (primary or not workspace) else f"_{workspace.upper().replace('-', '_')}"
     token_env = tg_cfg.get("token_env") or f"TELEGRAM_BOT_TOKEN{suffix}"
@@ -264,14 +265,14 @@ class TelegramBot:
         self.api = f"https://api.telegram.org/bot{self.token}"
         self.allowed = parse_chat_ids(os.environ.get(self.allowed_env, ""))
         self.offset: int | None = None
-        self.busy = asyncio.Lock()          # satu agent-chat berat pada satu waktu
+        self.busy = asyncio.Lock()          # one heavy agent-chat at a time
         self.http = httpx.AsyncClient(timeout=POLL_TIMEOUT + 15)
         self._stopping = asyncio.Event()
 
     def authorized(self, chat_id: int) -> bool:
         return chat_id in self.allowed      # fails closed
 
-    # ---- I/O Telegram ----
+    # ---- Telegram I/O ----
 
     async def send(self, chat_id: int, text: str, parse_mode: str | None = "HTML") -> None:
         for chunk in chunks(text):
@@ -288,11 +289,11 @@ class TelegramBot:
                 raise ValueError(r.json().get("description", "telegram error"))
         except (httpx.HTTPError, ValueError) as e:
             if parse_mode:
-                # markup jelek: strip tag, kirim plain — pesan jangan sampai hilang
-                log.warning("send HTML gagal (%s), retry plain", e)
+                # bad markup: strip tags, send plain — the message must not get lost
+                log.warning("send HTML failed (%s), retry plain", e)
                 await self._send_one(chat_id, html.unescape(_TAG_RE.sub("", text)), None)
             else:
-                log.error("send gagal: %s", e)
+                log.error("send failed: %s", e)
 
     async def send_reply(self, chat_id: int, raw_markdown: str) -> None:
         await self.send(chat_id, md_to_tg_html(redact_secrets(raw_markdown)))
@@ -305,7 +306,7 @@ class TelegramBot:
             pass
 
     async def notify(self, text: str) -> None:
-        """Broadcast ke semua chat allow-list (dipakai notif run selesai)."""
+        """Broadcast to every chat in the allow-list (used for run-finished notifs)."""
         for cid in self.allowed:
             await self.send(cid, text)
 
@@ -316,7 +317,7 @@ class TelegramBot:
         await self.notify(
             f"{emoji} loop <b>{run['status']}</b> ({html.escape(reason)})\n"
             f"<code>{run['id']}</code> — {html.escape(goal)}\n"
-            f"iterasi {run['iterations_done']}/{run['max_iterations']}, "
+            f"iterations {run['iterations_done']}/{run['max_iterations']}, "
             f"cost ${run['cost_total']:.2f}"
         )
 
@@ -334,11 +335,11 @@ class TelegramBot:
             f.write(resp.content)
         return local
 
-    # ---- chat agent (session per-chat, pola agent_run.sh) ----
+    # ---- chat agent (per-chat session, agent_run.sh pattern) ----
 
     def _sid_path(self, chat_id: int) -> str:
-        """Session dipisah per workspace: chat id yang sama ngobrol ke dua bot
-        beda nggak boleh nyampur konteks (workdir & rolenya beda)."""
+        """Sessions are split per workspace: the same chat id talking to two
+        different bots must not mix context (different workdir & role)."""
         d = os.path.join(SESSIONS_DIR, self.workspace) if self.workspace else SESSIONS_DIR
         os.makedirs(d, exist_ok=True)
         return os.path.join(d, f"{chat_id}.sid")
@@ -351,7 +352,7 @@ class TelegramBot:
 
     async def run_agent(self, chat_id: int, prompt: str) -> None:
         if self.busy.locked():
-            await self.send(chat_id, "⏳ Bentar, aku masih ngerjain yang tadi — sebentar lagi ya.")
+            await self.send(chat_id, "⏳ Hang on, I'm still on the last one — won't be long.")
             return
         async with self.busy:
             stop_typing = asyncio.Event()
@@ -372,11 +373,11 @@ class TelegramBot:
         await self.send_reply(chat_id, reply)
 
     def _progress_reporter(self, chat_id: int, interval: int):
-        """on_event buat claude_cli.run: kirim update progres ke chat, di-throttle.
+        """on_event for claude_cli.run: send throttled progress updates to the chat.
 
-        Biar user tau agent masih kerja (bukan hang) tanpa spam: maksimal satu
-        pesan per `interval` detik, isinya aksi terakhir. Balasan cepet (< interval)
-        nggak dapet update sama sekali. interval <= 0 = mati.
+        So the user knows the agent is still working (not hung) without spamming:
+        at most one message per `interval` seconds, containing the latest action.
+        Fast replies (< interval) get no update at all. interval <= 0 = off.
         """
         state = {"t0": time.monotonic(), "last": time.monotonic(), "tools": 0, "note": ""}
 
@@ -400,7 +401,7 @@ class TelegramBot:
             mins = int((now - state["t0"]) // 60)
             await self.send_reply(
                 chat_id,
-                f"⏳ masih jalan ({mins}m, {state['tools']} tool call) — {state['note']}")
+                f"⏳ still working ({mins}m, {state['tools']} tool calls) — {state['note']}")
 
         return on_event
 
@@ -432,8 +433,8 @@ class TelegramBot:
             resume=resume,
             session_id=session_id,
             model=model,
-            # Chat Telegram punya budget turn sendiri: default None = tanpa batas
-            # (tugas dari chat suka gede; guardrail-nya cmd_timeout_sec + continue).
+            # Telegram chat has its own turn budget: default None = no limit
+            # (chat tasks tend to be big; the guardrail is cmd_timeout_sec + continue).
             max_turns=tg.get("max_turns"),
             allowed_tools=tg.get(
                 "allowed_tools", "Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch,Task"),
@@ -446,33 +447,33 @@ class TelegramBot:
                 chat_id, tg.get("progress_interval_sec", 60)),
         )
         if res.ok:
-            return res.result_text.strip() or "(kosong)"
-        # Kehabisan max_turns / timeout ≠ session rusak: kerjaannya udah
-        # setengah jalan. Lanjutin session yang SAMA (sid masih di file),
-        # jangan reset — reset = buang progress + ngulang dari nol, boros dobel.
+            return res.result_text.strip() or "(empty)"
+        # Running out of max_turns / timeout ≠ a broken session: the work is already
+        # half done. Continue the SAME session (the sid is still in the file), don't
+        # reset — a reset throws the progress away and redoes it from zero, paying twice.
         if res.subtype in ("error_max_turns", "timeout"):
             if continues < MAX_AUTO_CONTINUES:
                 log.warning("%s chat=%s, auto-continue %d/%d",
                             res.subtype, chat_id, continues + 1, MAX_AUTO_CONTINUES)
                 await self.send_reply(
-                    chat_id, f"⏳ Belum kelar ({res.subtype}), gue lanjutin dulu...")
+                    chat_id, f"⏳ Not done yet ({res.subtype}), I'll keep going...")
                 return await self._invoke(
-                    chat_id, "lanjutin tugas sebelumnya sampai selesai",
+                    chat_id, "continue the previous task until it is finished",
                     retried=retried, continues=continues + 1)
-            log.error("%s chat=%s setelah %d continue, nyerah",
+            log.error("%s chat=%s after %d continues, giving up",
                       res.subtype, chat_id, continues)
-            return ("❌ Tugas kegedean: masih belum kelar walau udah "
-                    f"dilanjutin {continues}x ({res.subtype}). "
-                    "Coba pecah jadi tugas lebih kecil, atau kirim 'lanjutin' "
-                    "buat nerusin lagi.")
-        # Session basi bikin --resume gagal: buang sid, coba sekali lagi fresh.
+            return ("❌ Task too big: still not finished even after being "
+                    f"continued {continues}x ({res.subtype}). "
+                    "Try splitting it into smaller tasks, or send 'continue' "
+                    "to pick it up again.")
+        # A stale session makes --resume fail: drop the sid, try once more fresh.
         if resume and not retried:
-            log.warning("resume gagal chat=%s (%s), retry fresh", chat_id, res.subtype)
+            log.warning("resume failed chat=%s (%s), retry fresh", chat_id, res.subtype)
             self.reset_session(chat_id)
             return await self._invoke(chat_id, prompt, retried=True)
         err = (res.stderr_tail or res.subtype or "unknown error").strip()[:800]
-        log.error("agent invoke gagal chat=%s: %s", chat_id, err)
-        return f"❌ Agent gagal: {err}"
+        log.error("agent invoke failed chat=%s: %s", chat_id, err)
+        return f"❌ Agent failed: {err}"
 
     # ---- commands ----
 
@@ -481,8 +482,8 @@ class TelegramBot:
         text = (msg.get("text") or "").strip()
         caption = (msg.get("caption") or "").strip()
 
-        # Foto/dokumen: resolve ke path lokal → agent bisa Read. Jangan filter
-        # mime di sini (dok non-gambar jatuh diam-diam = bug lama dtc).
+        # Photo/document: resolve to a local path → the agent can Read it. Don't
+        # filter on mime here (non-image docs silently dropped = old dtc bug).
         photo, doc = msg.get("photo"), msg.get("document")
         if photo or doc:
             if not await self._require_auth(chat_id):
@@ -491,12 +492,12 @@ class TelegramBot:
                 file_id = photo[-1]["file_id"] if photo else doc["file_id"]
                 local = await self.download_file(file_id, chat_id)
             except Exception as e:  # noqa: BLE001
-                await self.send(chat_id, f"❌ Gagal download file-nya: {e}")
+                await self.send(chat_id, f"❌ Failed to download the file: {e}")
                 return
-            kind = "gambar" if photo else "file"
+            kind = "image" if photo else "file"
             label = "Image" if photo else f"File ({(doc or {}).get('mime_type', 'unknown')})"
             prompt = (forward_context(msg) + reply_context(msg)
-                      + (caption or f"Ini {kind} apa? Tolong jelasin/baca isinya.")
+                      + (caption or f"What is this {kind}? Explain/read what's in it.")
                       + f"\n\n[{label} received via Telegram, saved at: {local}"
                         " — use the Read tool to view/read it]")
             asyncio.create_task(self.run_agent(chat_id, prompt))
@@ -533,10 +534,10 @@ class TelegramBot:
             return
         if cmd == "/reset":
             self.reset_session(chat_id)
-            await self.send(chat_id, "🧹 Oke, obrolan kita aku mulai dari nol lagi.")
+            await self.send(chat_id, "🧹 Okay, starting our chat from scratch again.")
             return
 
-        # Default: freeform → agent (dia yang mutusin mau ngapain)
+        # Default: freeform → agent (it's the one deciding what to do)
         asyncio.create_task(
             self.run_agent(chat_id, forward_context(msg) + reply_context(msg) + text))
 
@@ -551,24 +552,24 @@ class TelegramBot:
         return False
 
     def _my_runs(self, limit: int | None = None) -> list[dict]:
-        """Bot cuma lihat run workspace-nya sendiri — tenant lain bukan urusannya."""
+        """The bot only sees its own workspace's runs — other tenants aren't its business."""
         return self.store.list_runs(workspace=self.workspace, limit=limit)
 
     async def _cmd_stop(self, chat_id: int, run_id: str) -> None:
         run = self.store.get_run(run_id) if run_id else None
         if run is None or (self.workspace and run.get("workspace") != self.workspace):
-            await self.send(chat_id, "Pakai: /stop <run_id> (lihat /loops)")
+            await self.send(chat_id, "Usage: /stop <run_id> (see /loops)")
             return
         self.store.request_stop(run_id)
-        await self.send(chat_id, f"⏹ stop diminta buat <code>{run_id}</code> "
-                                 "(loop cek flag antar iterasi).")
+        await self.send(chat_id, f"⏹ stop requested for <code>{run_id}</code> "
+                                 "(the loop checks the flag between iterations).")
 
     async def _cmd_new(self, chat_id: int, arg: str) -> None:
         parts = [p.strip() for p in arg.split("|")]
         if len(parts) < 2 or not parts[0] or not parts[1]:
             await self.send(chat_id,
-                            "Pakai: /new goal | verify_cmd [| workdir]\n"
-                            "contoh: <code>/new benerin test | npm test | /opt/app</code>")
+                            "Usage: /new goal | verify_cmd [| workdir]\n"
+                            "example: <code>/new fix the tests | npm test | /opt/app</code>")
             return
         goal, verify_cmd = parts[0], parts[1]
         workdir = parts[2] if len(parts) > 2 and parts[2] else None
@@ -576,7 +577,7 @@ class TelegramBot:
             workdir = os.path.join(config.scratch_dir(self.cfg), uuid.uuid4().hex[:8])
             os.makedirs(workdir, exist_ok=True)
         elif not os.path.isdir(workdir):
-            await self.send(chat_id, f"❌ workdir tidak ada: {workdir}")
+            await self.send(chat_id, f"❌ workdir does not exist: {workdir}")
             return
         loops_cfg = self.cfg["loops"]
         run_id = self.store.create_run(
@@ -586,13 +587,13 @@ class TelegramBot:
             max_cost_usd=loops_cfg["max_cost_usd"],
             workspace=self.workspace,
         )
-        await self.send(chat_id, f"🚀 loop <code>{run_id}</code> antri.\n"
+        await self.send(chat_id, f"🚀 loop <code>{run_id}</code> queued.\n"
                                  f"goal: {html.escape(goal)}\nworkdir: <code>{workdir}</code>")
 
     def loops_text(self) -> str:
         runs = self._my_runs(limit=8)
         if not runs:
-            return "belum ada run."
+            return "no runs yet."
         lines = []
         for r in runs:
             emoji = STATUS_EMOJI.get(r["status"], "❔")
@@ -607,27 +608,27 @@ class TelegramBot:
         counts: dict[str, int] = {}
         for r in runs:
             counts[r["status"]] = counts.get(r["status"], 0) + 1
-        parts = [f"{s}: {n}" for s, n in sorted(counts.items())] or ["kosong"]
+        parts = [f"{s}: {n}" for s, n in sorted(counts.items())] or ["empty"]
         scheds = ", ".join((self.cfg.get("schedules") or {}).keys()) or "—"
         tasks_ = ", ".join((self.cfg.get("tasks") or {}).keys()) or "—"
         return (f"🗂 workspace: <b>{self.workspace or '—'}</b>\n"
                 f"🧮 runs — {' · '.join(parts)}\n"
                 f"🗓 schedules: {scheds}\n"
                 f"⚡ tasks: {tasks_}\n"
-                f"👥 allow-list: {len(self.allowed)} chat")
+                f"👥 allow-list: {len(self.allowed)} chats")
 
     def help_text(self, chat_id: int) -> str:
-        auth = "✅" if self.authorized(chat_id) else "🚫 belum diizinin"
+        auth = "✅" if self.authorized(chat_id) else "🚫 not allowed yet"
         return (
             f"<b>nloop</b> — loop engine, workspace <b>{self.workspace or '—'}</b>. "
-            "Langsung chat aja buat nyuruh agent, "
-            f"atau pakai command. ({auth})\n\n"
-            "• /loops — daftar run terakhir\n"
-            "• /new goal | verify_cmd [| workdir] — antri loop baru\n"
-            "• /stop &lt;run_id&gt; — hentikan loop\n"
-            "• /status — ringkasan engine\n"
-            "• /reset — lupakan konteks obrolan\n"
-            "• /whoami — chat ID kamu"
+            "Just chat to put the agent to work, "
+            f"or use a command. ({auth})\n\n"
+            "• /loops — list the latest runs\n"
+            "• /new goal | verify_cmd [| workdir] — queue a new loop\n"
+            "• /stop &lt;run_id&gt; — stop a loop\n"
+            "• /status — engine summary\n"
+            "• /reset — forget the chat context\n"
+            "• /whoami — your chat ID"
         )
 
     # ---- main loop ----

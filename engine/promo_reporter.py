@@ -1,17 +1,17 @@
-"""Laporan traffic harian promo Buffer (attribution PostHog) -> Telegram.
+"""Daily Buffer promo traffic report (PostHog attribution) -> Telegram.
 
-Sengaja BUKAN lewat `schedules:` (yang nyepawn loop claude penuh) — laporan ini
-murni ambil data + format teks, jadi task async ringan sendiri (pola sama kayak
-scheduler.py/watchdog.py: next_at_delay buat jadwal harian "at: HH:MM" UTC),
-konsisten sama prinsip resource frugality di CLAUDE.md: jangan bakar subscription
-request buat kerjaan yang deterministik.
+Deliberately NOT routed through `schedules:` (which spawns a full claude loop) —
+this report is pure data fetching + text formatting, so it is its own lightweight
+async task (same pattern as scheduler.py/watchdog.py: next_at_delay for a daily
+"at: HH:MM" UTC schedule). That is consistent with the resource-frugality principle
+in CLAUDE.md: don't burn subscription requests on deterministic work.
 
-report_fn dibikin bisa di-inject (default: import scripts/promo_report.py via
-importlib) biar gampang di-fake pas testing tanpa nyentuh network PostHog.
+report_fn is injectable (default: import scripts/promo_report.py via importlib) so
+it is easy to fake in tests without touching the PostHog network.
 
-Teks laporan format Markdown (tabel pipe, bold, bullet) — di-convert ke HTML
-Telegram lewat engine.telegram.md_to_tg_html (fungsi yang sama dipake chat agent),
-jadi tabelnya kebentuk grid <pre> rapi, bukan blok teks polos.
+The report text is Markdown (pipe tables, bold, bullets) — converted to Telegram
+HTML by engine.telegram.md_to_tg_html (the same function the agent chat uses), so
+the tables come out as a tidy <pre> grid instead of a flat block of text.
 """
 from __future__ import annotations
 
@@ -59,7 +59,7 @@ class PromoReporter:
         try:
             text = await asyncio.to_thread(self.report_fn, self.cfg.get("days", 7))
         except Exception:
-            log.exception("promo_report gagal, skip kirim")
+            log.exception("promo_report failed, skipping send")
             return
         await self.bot.notify(md_to_tg_html(text))
 
@@ -67,7 +67,7 @@ class PromoReporter:
         self._stopping.set()
 
     async def _sleep(self, sec: float) -> bool:
-        """Tidur responsif ke stop(). Return False kalau kepotong stop."""
+        """Sleep responsively to stop(). Returns False when cut short by stop."""
         try:
             await asyncio.wait_for(self._stopping.wait(), sec)
             return False

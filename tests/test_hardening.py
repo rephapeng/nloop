@@ -1,4 +1,4 @@
-"""Fase 6: guardrails — loop rusak harus mati rapi, bukan muter/boros."""
+"""Fase 6: guardrails — a broken loop must die cleanly, not spin or burn money."""
 import asyncio
 from pathlib import Path
 
@@ -29,10 +29,10 @@ def workdir(tmp_path):
 
 
 def scripted_claude(monkeypatch, behaviors):
-    """Fake claude yang perilakunya di-script per attempt.
+    """Fake claude whose behaviour is scripted per attempt.
 
-    behaviors: list of dict {subtype, ok?, cost?, fix?} — attempt ke-N pakai
-    behaviors[N-1]; lewat itu pakai yang terakhir.
+    behaviors: list of dict {subtype, ok?, cost?, fix?} — attempt N uses
+    behaviors[N-1]; past that it reuses the last one.
     """
     calls: list[str] = []
 
@@ -66,7 +66,7 @@ def warn_logs(store, run_id):
 VERIFY = "test -f done.txt"
 
 
-# ---- retry transient ----
+# ---- transient retry ----
 
 def test_transient_error_retried_and_recovers(monkeypatch, store, cfg, workdir):
     calls = scripted_claude(monkeypatch, [
@@ -75,10 +75,10 @@ def test_transient_error_retried_and_recovers(monkeypatch, store, cfg, workdir):
     ])
     run_id = store.create_run("g", VERIFY, workdir)
     assert run(store, cfg, run_id) == "succeeded"
-    assert len(calls) == 2                                     # attempt gagal + retry sukses
+    assert len(calls) == 2                                     # failed attempt + working retry
     r = store.get_run(run_id)
-    assert r["iterations_done"] == 1                           # tetap 1 iterasi
-    assert r["cost_total"] == pytest.approx(0.05)              # cost attempt gagal kehitung
+    assert r["iterations_done"] == 1                           # still just 1 iteration
+    assert r["cost_total"] == pytest.approx(0.05)              # failed attempt's cost counts
     assert any("retry" in m for m in warn_logs(store, run_id))
 
 
@@ -89,25 +89,25 @@ def test_max_turns_not_treated_as_transient(monkeypatch, store, cfg, workdir):
     ])
     run_id = store.create_run("g", VERIFY, workdir, max_iterations=3)
     assert run(store, cfg, run_id) == "succeeded"
-    # error_max_turns BUKAN transient → nggak di-retry dalam iterasi yang sama;
-    # iterasi berikutnya yang nyoba lagi
+    # error_max_turns is NOT transient → no retry inside the same iteration;
+    # the next iteration is what tries again
     assert not any("retry" in m for m in warn_logs(store, run_id))
     assert store.get_run(run_id)["iterations_done"] == 2
     assert len(calls) == 2
 
 
-# ---- error beruntun & fatal ----
+# ---- consecutive errors & fatal ----
 
 def test_consecutive_errors_fail_run(monkeypatch, store, cfg, workdir):
     calls = scripted_claude(monkeypatch, [
         {"subtype": "error_during_execution", "ok": False},
     ])
-    # verifier variatif biar yang ketrigger guardrail error, bukan no_progress
+    # varying verifier output so the error guardrail fires, not no_progress
     run_id = store.create_run("g", "date +%s%N; exit 1", workdir, max_iterations=10)
     assert run(store, cfg, run_id) == "failed"
     last = store.events_since(run_id)[-1]["payload"]
     assert last["reason"] == "claude_errors"
-    # 2 iterasi (cap) x 2 attempt (retry transient) = 4 call claude
+    # 2 iterations (cap) x 2 attempts (transient retry) = 4 claude calls
     assert len(calls) == 4
 
 
@@ -115,7 +115,7 @@ def test_claude_not_found_fails_fast(monkeypatch, store, cfg, workdir):
     calls = scripted_claude(monkeypatch, [{"subtype": "claude_not_found", "ok": False}])
     run_id = store.create_run("g", "exit 1", workdir, max_iterations=10)
     assert run(store, cfg, run_id) == "failed"
-    assert len(calls) == 1                                     # fatal: no retry, no iterasi lanjut
+    assert len(calls) == 1                                     # fatal: no retry, no next iter
     last = store.events_since(run_id)[-1]["payload"]
     assert last["reason"] == "claude_not_found"
 
@@ -123,7 +123,7 @@ def test_claude_not_found_fails_fast(monkeypatch, store, cfg, workdir):
 # ---- no-progress ----
 
 def test_progress_resets_no_progress_counter(monkeypatch, store, cfg, workdir):
-    """Output verifier berubah tiap iterasi → nggak boleh kena stop no_progress."""
+    """Verifier output changes every iteration → must not trip the no_progress stop."""
     calls: list[str] = []
 
     async def fake_run(prompt, *, cwd, resume=None, **kwargs):
@@ -137,8 +137,8 @@ def test_progress_resets_no_progress_counter(monkeypatch, store, cfg, workdir):
                               workdir, max_iterations=4)
     assert run(store, cfg, run_id) == "failed"
     last = store.events_since(run_id)[-1]["payload"]
-    assert last["reason"] == "max_iterations"                  # bukan no_progress
-    assert len(calls) == 4                                     # semua iterasi kepake
+    assert last["reason"] == "max_iterations"                  # not no_progress
+    assert len(calls) == 4                                     # every iteration got used
 
 
 # ---- budget alert ----
@@ -149,6 +149,6 @@ def test_budget_warning_emitted_once(monkeypatch, store, cfg, workdir):
                               max_iterations=10, max_cost_usd=2.0)
     assert run(store, cfg, run_id) == "failed"
     budget_warns = [m for m in warn_logs(store, run_id) if "budget" in m]
-    assert len(budget_warns) == 1                              # warning sekali, nggak spam
+    assert len(budget_warns) == 1                              # warned once, no spam
     last = store.events_since(run_id)[-1]["payload"]
     assert last["reason"] == "budget_exceeded"

@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=exec
 WorkingDirectory=/opt/nloop
-# claude CLI ada di ~/.local/bin — PATH default systemd nggak mencakup itu
+# the claude CLI lives in ~/.local/bin — systemd's default PATH doesn't cover it
 Environment=PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/opt/nloop/run.sh
 Restart=on-failure

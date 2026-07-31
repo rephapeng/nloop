@@ -1,15 +1,15 @@
 """Adapter subprocess → `claude -p` (subscription-safe, stream-json).
 
-Kunci kompatibilitas subscription (pola refan-agentic + dtc-agent):
-- env.pop("CLAUDECODE")             → nggak kedeteksi nested session
-- env.pop("ANTHROPIC_API_KEY")      → paksa auth login subscription, bukan API billing
-- env.pop("ANTHROPIC_AUTH_TOKEN")   → idem (jalur token alternatif)
-- env.pop("ANTHROPIC_BASE_URL")     → jangan ke-redirect ke gateway API custom
-- lock_file (opsional)              → flock single-flight LINTAS proses/project
-  (pola .claude.lock dtc-agent: satu subscription, jangan hammering paralel)
+The keys to subscription compatibility (refan-agentic + dtc-agent pattern):
+- env.pop("CLAUDECODE")             → don't get detected as a nested session
+- env.pop("ANTHROPIC_API_KEY")      → force subscription login auth, not API billing
+- env.pop("ANTHROPIC_AUTH_TOKEN")   → same (the alternative token path)
+- env.pop("ANTHROPIC_BASE_URL")     → don't get redirected to a custom API gateway
+- lock_file (optional)              → flock single-flight ACROSS processes/projects
+  (dtc-agent's .claude.lock pattern: one subscription, don't hammer it in parallel)
 
-Output `--output-format stream-json --verbose` dibaca baris-per-baris (incremental,
-jangan buffer gede) dan dipetakan ke callback event: init | turn | tool | result.
+The `--output-format stream-json --verbose` output is read line by line (incremental,
+no big buffers) and mapped onto event callbacks: init | turn | tool | result.
 """
 from __future__ import annotations
 
@@ -19,14 +19,15 @@ import os
 from dataclasses import dataclass
 
 DEFAULT_ALLOWED_TOOLS = "Bash,Read,Edit,Write,Glob,Grep"
-STREAM_LIMIT = 10 * 1024 * 1024  # baris stream-json bisa gede (tool_result)
+STREAM_LIMIT = 10 * 1024 * 1024  # a stream-json line can get big (tool_result)
 ENV_STRIP = ("CLAUDECODE", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
              "ANTHROPIC_BASE_URL")
 
 
 def last_json(text: str) -> dict | None:
-    """Ambil objek JSON TERAKHIR dari output model (kontrak "JSON last line" dtc:
-    role diminta menutup jawaban dengan satu baris JSON, mis. {"pass": true, ...})."""
+    """Take the LAST JSON object out of the model's output (dtc's "JSON last line"
+    contract: the role is told to close its answer with one JSON line, e.g.
+    {"pass": true, ...})."""
     for line in reversed((text or "").splitlines()):
         line = line.strip()
         if not (line.startswith("{") and line.endswith("}")):
@@ -67,12 +68,12 @@ async def run(
     lock_file: str | None = None,
     on_event=None,
 ) -> ClaudeResult:
-    """Jalankan satu iterasi `claude -p`. `on_event(type, payload)` boleh sync/async.
+    """Run one `claude -p` iteration. `on_event(type, payload)` may be sync or async.
 
-    - system_prompt → --append-system-prompt (role/grounding, pola dtc run_claude.sh)
-    - session_id    → --session-id (mulai sesi BARU dengan id stabil yang kita pegang;
-                      dipakai chat Telegram; kalau `resume` diisi, resume yang menang)
-    - lock_file     → dibungkus `flock -w timeout` — single-flight lintas proses
+    - system_prompt → --append-system-prompt (role/grounding, dtc run_claude.sh pattern)
+    - session_id    → --session-id (starts a NEW session under a stable id we hold;
+                      used by Telegram chat; if `resume` is set, resume wins)
+    - lock_file     → wrapped in `flock -w timeout` — cross-process single-flight
     """
     cmd = [
         "claude", "-p", prompt,
@@ -80,7 +81,7 @@ async def run(
         "--permission-mode", permission_mode,
         "--allowedTools", allowed_tools,
     ]
-    if max_turns is not None:    # None = tanpa batas turn (chat Telegram)
+    if max_turns is not None:    # None = no turn limit (Telegram chat)
         cmd += ["--max-turns", str(max_turns)]
     if resume:
         cmd += ["--resume", resume]
@@ -91,8 +92,8 @@ async def run(
     if system_prompt:
         cmd += ["--append-system-prompt", system_prompt]
     if lock_file:
-        # flock nunggu maksimal se-timeout iterasi; kalau nggak kebagian, exit != 0
-        # tanpa event `result` → kebaca sebagai error transient (kena retry loop).
+        # flock waits at most one iteration timeout; if it never gets the lock, exit != 0
+        # with no `result` event → read as a transient error (picked up by the retry loop).
         cmd = ["flock", "-w", str(timeout_sec), lock_file] + cmd
 
     env = os.environ.copy()
@@ -149,7 +150,7 @@ async def run(
 
 
 async def _handle(ev: dict, res: ClaudeResult, emit) -> None:
-    """Petakan satu baris stream-json ke ClaudeResult + event."""
+    """Map one stream-json line onto ClaudeResult + an event."""
     t = ev.get("type")
     if t == "system" and ev.get("subtype") == "init":
         res.session_id = ev.get("session_id")

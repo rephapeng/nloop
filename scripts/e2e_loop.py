@@ -1,9 +1,9 @@
-"""Acceptance Fase 2 dengan claude BENERAN: test gagal → loop benerin → succeeded.
+"""Fase 2 acceptance with a REAL claude: test fails → loop fixes it → succeeded.
 
-Bikin workspace berisi calc.py yang bug (add pakai minus) + test-nya, lalu lepas
-loop dengan verifier `python3 test_calc.py`. Loop harus benerin sendiri.
+Builds a workspace holding a buggy calc.py (add uses minus) plus its test, then turns
+the loop loose with `python3 test_calc.py` as the verifier. The loop has to fix it itself.
 
-Usage: python scripts/e2e_loop.py [--model sonnet]    # default sonnet (murah)
+Usage: python scripts/e2e_loop.py [--model sonnet]    # default sonnet (cheap)
 """
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ from engine.store import Store  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 WS = ROOT / "workspaces" / "e2e-demo"
 
-CALC = "def add(a, b):\n    return a - b  # BUG disengaja\n"
+CALC = "def add(a, b):\n    return a - b  # BUG on purpose\n"
 TEST = (
     "from calc import add\n"
-    "assert add(2, 3) == 5, f'add(2,3) = {add(2, 3)}, harusnya 5'\n"
-    "print('test lolos')\n"
+    "assert add(2, 3) == 5, f'add(2,3) = {add(2, 3)}, should be 5'\n"
+    "print('test passed')\n"
 )
 
 
@@ -39,8 +39,8 @@ async def main() -> None:
     cfg = config.load(str(ROOT / "config.yaml"))
     store = Store(str(ROOT / "workspaces" / "e2e-demo.db"))
     run_id = store.create_run(
-        "Perbaiki bug di calc.py supaya `python3 test_calc.py` lolos. "
-        "JANGAN mengubah test_calc.py.",
+        "Fix the bug in calc.py so that `python3 test_calc.py` passes. "
+        "Do NOT modify test_calc.py.",
         "python3 test_calc.py",
         str(WS),
         model=model,
@@ -57,8 +57,8 @@ async def main() -> None:
     run = store.get_run(run_id)
     print(f"\nstatus={status} iterations={run['iterations_done']} "
           f"cost=${run['cost_total']:.4f}")
-    assert status == "succeeded", "loop gagal benerin test"
-    print("Fase 2 acceptance: OK — observe→act→verify→recover beneran jalan")
+    assert status == "succeeded", "the loop failed to fix the test"
+    print("Fase 2 acceptance: OK — observe→act→verify→recover really works")
 
 
 if __name__ == "__main__":

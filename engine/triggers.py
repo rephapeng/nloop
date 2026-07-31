@@ -1,16 +1,16 @@
-"""Reactive triggers: payload webhook (Sentry/PostHog/generic) → goal loop.
+"""Reactive triggers: a webhook payload (Sentry/PostHog/generic) → a loop goal.
 
-Format webhook tiap vendor beda-beda (dan sering berubah), jadi extractor-nya
-toleran: nyoba beberapa path yang umum, fallback ke hash judul buat fingerprint.
-Fingerprint dipakai dedup — issue sama nggak boleh spawn loop dobel selama
-masih ada run aktif (queued/running).
+Every vendor's webhook format differs (and changes often), so the extractor is
+tolerant: it tries a handful of common paths and falls back to hashing the title
+for a fingerprint. The fingerprint drives dedup — the same issue must never spawn
+a second loop while an active run (queued/running) exists.
 
-Mode repro-first (default buat issue run): verifier project doang nggak cukup —
-error runtime (mayoritas issue Sentry) nggak bikin build merah, loop bakal
-"selesai" tanpa ngapa-ngapain. Makanya verify_cmd issue run digabung dengan
-script repro yang WAJIB ditulis agent dulu: file belum ada → verifier gagal →
-loop dipaksa ACT (investigasi + tulis repro + fix), dan "selesai" berarti
-repro lolos DAN health check project lolos.
+Repro-first mode (the default for issue runs): the project verifier alone is not
+enough — runtime errors (most Sentry issues) don't turn the build red, so the loop
+would "finish" without doing anything. That is why an issue run's verify_cmd is
+combined with a repro script the agent MUST write first: the file doesn't exist →
+the verifier fails → the loop is forced to ACT (investigate + write a repro + fix),
+and "done" means the repro passes AND the project health check passes.
 """
 from __future__ import annotations
 
@@ -20,11 +20,11 @@ import re
 from engine import tasks
 
 REPRO_DIR = ".nloop/repro"
-ISSUE_TASK = "issue-fix"   # task_id bawaan buat run dari webhook/watchdog
+ISSUE_TASK = "issue-fix"   # built-in task_id for runs from webhook/watchdog
 
 
 def _dig(d: dict, *paths: str):
-    """Ambil nilai pertama yang ketemu dari beberapa dotted-path."""
+    """Return the first value found across several dotted paths."""
     for path in paths:
         cur = d
         found = True
@@ -40,7 +40,7 @@ def _dig(d: dict, *paths: str):
 
 
 def extract_issue(source: str, payload: dict) -> dict:
-    """Normalisasi payload webhook → {fingerprint, title, url, detail}."""
+    """Normalise a webhook payload → {fingerprint, title, url, detail}."""
     if source == "sentry":
         fp = _dig(payload, "data.issue.id", "data.event.issue_id", "issue_id", "id")
         title = _dig(payload, "data.issue.title", "data.event.title",
@@ -56,14 +56,14 @@ def extract_issue(source: str, payload: dict) -> dict:
         url = _dig(payload, "issue_url", "url", "event.url")
         detail = _dig(payload, "description",
                       "event.properties.$exception_type", "detail")
-    else:  # generic — bisa dipakai curl manual / vendor lain
+    else:  # generic — usable from a manual curl / any other vendor
         fp = _dig(payload, "fingerprint", "issue_id", "id")
         title = _dig(payload, "title", "message", "name")
         url = _dig(payload, "url")
         detail = _dig(payload, "detail", "description")
 
     title = str(title) if title else "(untitled issue)"
-    if not fp:  # tanpa id → fingerprint dari judul, biar dedup tetap jalan
+    if not fp:  # no id → fingerprint from the title, so dedup still works
         fp = hashlib.sha1(f"{source}:{title}".encode()).hexdigest()[:16]
     return {
         "fingerprint": f"{source}:{fp}",
@@ -74,25 +74,25 @@ def extract_issue(source: str, payload: dict) -> dict:
 
 
 def repro_path(fingerprint: str) -> str:
-    """Path script repro per-issue di dalam workdir project (relatif)."""
+    """Path of the per-issue repro script inside the project workdir (relative)."""
     safe = re.sub(r"[^A-Za-z0-9_-]", "-", fingerprint)
     return f"{REPRO_DIR}/{safe}.sh"
 
 
 def compose_verify(project_verify_cmd: str, rpath: str) -> str:
-    """Verifier issue run = repro DULU baru health check project.
-    File repro belum ada → `sh` exit 127 → verifier gagal → loop dipaksa ACT."""
+    """An issue run's verifier = the repro FIRST, then the project health check.
+    No repro file yet → `sh` exits 127 → the verifier fails → the loop is forced to ACT."""
     return f"sh {rpath} && ({project_verify_cmd})"
 
 
 def create_issue_run(store, cfg: dict, proj: dict, source: str, issue: dict) -> str:
-    """Spawn satu issue-fix run dari issue ternormalisasi — jalur bersama
-    webhook (push) dan watchdog (poll), biar perilakunya identik.
+    """Spawn one issue-fix run from a normalised issue — the shared path for both
+    the webhook (push) and the watchdog (poll), so their behaviour is identical.
 
-    Project boleh nunjuk task registry sendiri (`task: <id>` di triggers.projects):
-    payload-nya = issue ternormalisasi + source. Tanpa itu, dipakai pipeline
-    issue-fix bawaan (repro-first) di bawah — tetap dicatat `task_id=issue-fix`
-    biar kekelompok di dashboard.
+    A project may point at its own registry task (`task: <id>` under triggers.projects):
+    its payload is the normalised issue + source. Without that, the built-in issue-fix
+    pipeline (repro-first) below is used — still recorded as `task_id=issue-fix` so it
+    groups in the dashboard.
     """
     payload = {"source": source, **issue}
     if proj.get("task"):
@@ -129,29 +129,31 @@ def create_issue_run(store, cfg: dict, proj: dict, source: str, issue: dict) -> 
 def build_goal(source: str, issue: dict, *, repro_path: str | None = None,
                verify_cmd: str | None = None) -> str:
     lines = [
-        f"Issue baru masuk dari {source}: {issue['title']}",
+        f"A new issue came in from {source}: {issue['title']}",
     ]
     if issue["url"]:
-        lines.append(f"Link issue: {issue['url']}")
+        lines.append(f"Issue link: {issue['url']}")
     if issue["detail"]:
         lines.append(f"Detail: {issue['detail']}")
     if repro_path:
         lines += [
             "",
-            "Kerjakan sebagai issue-fix loop:",
-            "1. INVESTIGASI: baca stacktrace/judul di atas, telusuri kode terkait "
-            "di working directory ini sampai ketemu root cause-nya.",
-            f"2. REPRO: tulis script `{repro_path}` yang MEREPRODUKSI error ini — "
-            "exit != 0 selama bug masih ada, exit 0 setelah bener. Harus se-spesifik "
-            "mungkin ke error ini (unit test / skenario nyata), BUKAN placeholder "
-            "`exit 0` — verifier repro yang bohong = issue balik lagi dari produksi.",
-            "3. FIX: perbaiki root cause-nya di kode, bukan sekadar bikin repro lolos.",
-            f"4. Selesai/tidaknya ditentukan verifier eksternal: `{verify_cmd}` — "
-            "script repro DAN health check project dua-duanya harus lolos.",
+            "Work this as an issue-fix loop:",
+            "1. INVESTIGATE: read the stacktrace/title above and trace the related code "
+            "in this working directory until you find the root cause.",
+            f"2. REPRO: write a script `{repro_path}` that REPRODUCES this error — "
+            "exit != 0 while the bug is present, exit 0 once it is fixed. It must be as "
+            "specific to this error as possible (a unit test / a real scenario), NOT a "
+            "placeholder `exit 0` — a lying repro verifier means the issue comes straight "
+            "back from production.",
+            "3. FIX: repair the root cause in the code, not merely make the repro pass.",
+            f"4. Whether you are done is decided by an external verifier: `{verify_cmd}` — "
+            "the repro script AND the project health check must both pass.",
         ]
     else:
         lines.append(
-            "Investigasi root cause error ini di project (working directory ini), "
-            "lalu perbaiki sampai verifier lolos. Kalau butuh, tulis test reproduksi dulu."
+            "Investigate the root cause of this error in the project (this working "
+            "directory), then fix it until the verifier passes. Write a reproduction "
+            "test first if that helps."
         )
     return "\n".join(lines)

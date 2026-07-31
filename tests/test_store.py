@@ -76,7 +76,7 @@ def test_events_since(tmp_path):
     all_events = s.events_since(run_id)
     assert [e["type"] for e in all_events] == ["verify", "turn"]
     assert all_events[0]["payload"] == {"passed": False}
-    # replay dari tengah (buat SSE reconnect)
+    # replay from the middle (for SSE reconnect)
     later = s.events_since(run_id, after_id=id1)
     assert [e["type"] for e in later] == ["turn"]
 
@@ -99,10 +99,10 @@ def test_list_runs_newest_first(tmp_path):
 
 def test_last_runs_for_fingerprint_chronological(tmp_path):
     s = make_store(tmp_path)
-    fp = "schedule:promo-pagi"
-    step1 = s.create_run("tulis draft", "exit 0", "/ws", fingerprint=fp)
+    fp = "schedule:morning-promo"
+    step1 = s.create_run("write draft", "exit 0", "/ws", fingerprint=fp)
     step2 = s.create_run("crosspost", "exit 0", "/ws", fingerprint=fp)
-    other = s.create_run("nggak nyambung", "exit 0", "/ws", fingerprint="schedule:lain")
+    other = s.create_run("unrelated", "exit 0", "/ws", fingerprint="schedule:other")
     got = s.last_runs_for_fingerprint(fp, limit=2)
     assert [r["id"] for r in got] == [step1, step2]
     assert other not in [r["id"] for r in got]

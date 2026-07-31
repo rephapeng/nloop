@@ -1,8 +1,8 @@
-"""In-memory pub/sub per run (asyncio.Queue per subscriber) buat SSE.
+"""In-memory pub/sub per run (one asyncio.Queue per subscriber) for SSE.
 
-Live-stream doang — replay/persist urusan store.events. Subscriber lelet
-(queue penuh) nggak boleh nge-block loop: event di-drop, dia bisa recover
-lewat replay `?after=<id>` karena semua event toh ke-persist.
+Live streaming only — replay/persistence is store.events' job. A slow subscriber
+(full queue) must never block the loop: the event is dropped, and it can recover
+via `?after=<id>` replay since every event is persisted anyway.
 """
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class EventBus:
             try:
                 q.put_nowait(event)
             except asyncio.QueueFull:
-                pass  # subscriber lelet → drop; dia replay dari DB
+                pass  # slow subscriber → drop it; they replay from the DB
 
     def subscriber_count(self, run_id: str) -> int:
         return len(self._subs.get(run_id, ()))

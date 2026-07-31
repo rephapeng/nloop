@@ -1,5 +1,5 @@
-// Halaman Run: waterfall span (trace) + log live SSE.
-// Trace-nya dihitung server (engine/trace.py) — di sini murni rendering.
+// Run page: the span waterfall (trace) + the live SSE log.
+// The trace is computed server-side (engine/trace.py) — this is pure rendering.
 'use strict';
 
 const runId = location.pathname.split('/').pop();
@@ -45,7 +45,7 @@ async function loadRun() {
   $('#cost').textContent = `${fmtCost(run.cost_total)} / ${fmtCost(run.max_cost_usd)}`;
   setBar($('#cost-bar'), (run.cost_total || 0) / (run.max_cost_usd || 1), 0.8);
 
-  if (!ACTIVE.includes(run.status) && poller) {  // run final → berhenti polling
+  if (!ACTIVE.includes(run.status) && poller) {  // run is final → stop polling
     clearInterval(poller);
     poller = null;
   }
@@ -54,7 +54,7 @@ async function loadRun() {
 
 // ---------- waterfall ----------
 
-/** Spans (flat, punya parent_id) → urutan DFS + kedalaman, biar bisa di-render baris. */
+/** Spans (flat, with parent_id) → DFS order + depth, so they can render as rows. */
 function orderSpans(spans) {
   const byParent = new Map();
   for (const s of spans) {
@@ -74,7 +74,7 @@ function orderSpans(spans) {
   return out;
 }
 
-/** Pilih span tanpa gambar ulang seluruh waterfall (biar nggak kedip). */
+/** Select a span without redrawing the whole waterfall (avoids flicker). */
 function selectSpan(id) {
   selected = id;
   $$('#waterfall .span-row').forEach((el) => el.classList.toggle('sel', el.dataset.span === id));
@@ -109,7 +109,7 @@ function renderTrace(t) {
   $$('#waterfall .span-row').forEach((el) => el.addEventListener('click',
     () => selectSpan(el.dataset.span)));
 
-  if (!tracePainted) {         // bar tumbuh dari kiri, sekali doang pas pertama digambar
+  if (!tracePainted) {         // bars grow from the left, once, on the first paint
     tracePainted = true;
     const wrap = $('.waterfall-wrap');
     wrap.classList.add('first-paint');
@@ -126,13 +126,13 @@ function renderSpanDetail() {
   const s = (traceData.spans || []).find((x) => x.id === selected);
   const el = $('#span-detail');
   if (!s) {
-    el.innerHTML = '<div class="hint-box">Klik salah satu span buat lihat detailnya.</div>';
+    el.innerHTML = '<div class="hint-box">Click a span to see its details.</div>';
     return;
   }
   const d = s.detail || {};
   const rows = [
-    ['durasi', fmtDur(s.duration) + (s.approx ? ' (taksiran)' : '')],
-    ['mulai', new Date(s.start * 1000).toLocaleTimeString()],
+    ['duration', fmtDur(s.duration) + (s.approx ? ' (estimated)' : '')],
+    ['started', new Date(s.start * 1000).toLocaleTimeString()],
     d.exit_code !== undefined && d.exit_code !== null ? ['exit code', d.exit_code] : null,
     d.turns ? ['turns', d.turns] : null,
     d.cost ? ['cost', fmtCost(d.cost)] : null,
@@ -147,15 +147,15 @@ function renderSpanDetail() {
       ${s.status ? badge(({ok: 'succeeded', fail: 'failed', warn: 'stopped',
                            running: 'running'})[s.status] || 'queued') : ''}
     </div>
-    ${s.approx ? '<div class="hint-box small">Durasi span ini <b>ditaksir</b> dari jarak antar event — stream cuma nyimpen satu timestamp.</div>' : ''}
+    ${s.approx ? '<div class="hint-box small">This span\'s duration is <b>estimated</b> from the gap between events — the stream only records a single timestamp.</div>' : ''}
     <dl class="sd-rows">${rows.map(([k, v]) =>
       `<div><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
     ${d.reasons && d.reasons.length
-      ? `<h4>alasan gate</h4><ul class="sd-list">${
+      ? `<h4>gate reasons</h4><ul class="sd-list">${
           d.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
     ${pre('input', typeof d.input === 'string' ? d.input : d.input && JSON.stringify(d.input))}
     ${pre('output', d.output)}
-    ${pre('hasil act', d.result_text)}`;
+    ${pre('act result', d.result_text)}`;
 }
 
 async function loadTrace() {
@@ -182,9 +182,9 @@ function streamEvents() {
   const live = $('#live');
   const jump = $('#jump-live');
 
-  // Dulu tiap event maksa scrollTop ke bawah — pas lagi baca log ke atas, layarnya
-  // ketarik terus. Sekarang auto-scroll cuma kalau user emang lagi nempel di bawah;
-  // kalau nggak, tombol "↓ log terbaru" yang muncul.
+  // Every event used to force scrollTop to the bottom — scroll up to read something
+  // and the view kept getting yanked back. Now it only auto-scrolls when the user is
+  // already stuck to the bottom; otherwise the "↓ latest" button appears.
   const atBottom = () => live.scrollHeight - live.scrollTop - live.clientHeight < 48;
   let stick = true;
   live.addEventListener('scroll', () => {
@@ -209,7 +209,7 @@ function streamEvents() {
   const data = (e) => JSON.parse(e.data);
   let dirty = false;
   const touch = () => { dirty = true; };
-  setInterval(() => {           // trace di-refresh ter-throttle, bukan tiap event
+  setInterval(() => {           // the trace refresh is throttled, not per-event
     if (!dirty) return;
     dirty = false;
     loadRun().catch(() => {});
@@ -241,7 +241,7 @@ function streamEvents() {
   es.addEventListener('postrun', (e) => {
     const d = data(e);
     add(d.ok ? 'pass' : 'fail', 'verify',
-      `🚀 rilis: ${d.ok ? 'OK' : 'GAGAL'} — ${d.cmd}`);
+      `🚀 release: ${d.ok ? 'OK' : 'FAILED'} — ${d.cmd}`);
     touch();
   });
   es.addEventListener('log', (e) => {
@@ -277,7 +277,7 @@ async function init() {
     run = await loadRun();
   } catch (e) {
     $('#waterfall').innerHTML = '';
-    return showError(`run '${runId}' nggak kebaca: ${e.message}`);
+    return showError(`run '${runId}' could not be read: ${e.message}`);
   }
   await loadTrace();
   streamEvents();

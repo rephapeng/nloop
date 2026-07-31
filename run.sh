@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# nloop server + worker (worker jalan di lifespan FastAPI).
-# host/port dari config.yaml (section server), bisa dioverride env HOST/PORT.
+# nloop server + worker (the worker runs inside the FastAPI lifespan).
+# host/port come from config.yaml (the server section), overridable with the HOST/PORT env vars.
 set -e
 cd "$(dirname "$0")"
 [ -d .venv ] && source .venv/bin/activate

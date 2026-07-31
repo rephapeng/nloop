@@ -72,7 +72,7 @@ def test_postrun_skipped_when_loop_fails(monkeypatch, store, cfg, workdir):
     run_id = store.create_run("g", "exit 1", workdir, max_iterations=1,
                               on_success_cmd="touch deployed.txt")
     assert run(store, cfg, run_id) == "failed"
-    assert not (Path(workdir) / "deployed.txt").exists()   # gagal ≠ deploy
+    assert not (Path(workdir) / "deployed.txt").exists()   # a failed run must not deploy
 
 
 def test_postrun_skipped_when_stopped(monkeypatch, store, cfg, workdir):
@@ -135,7 +135,7 @@ def test_resolve_api_error_is_warning_not_crash(cfg, monkeypatch):
 
 
 def test_loop_emits_resolve_log(monkeypatch, store, cfg, workdir):
-    """E2E kecil: run sukses dengan fingerprint sentry → event log resolve muncul."""
+    """Small e2e: a successful run with a sentry fingerprint → the resolve log event shows up."""
     fake_claude(monkeypatch)
     cfg["triggers"]["sentry"]["resolve"] = True
     monkeypatch.delenv("SENTRY_AUTH_TOKEN", raising=False)    # → jalur warning, no network

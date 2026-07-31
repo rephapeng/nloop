@@ -1,29 +1,31 @@
-"""Roles + grounding → system prompt (pola dtc-agent run_claude.sh).
+"""Roles + grounding → system prompt (the dtc-agent run_claude.sh pattern).
 
-System prompt dirakit dari tiga lapis, semuanya opsional:
-1. roles/common.md            — aturan bersama, selalu di-prepend kalau ada
-2. output `context_cmd`       — grounding SEGAR: perintah shell dijalankan di
-   workdir tiap iterasi, stdout-nya di-inject (pola build_knowledge.py dtc:
-   agent cuma boleh nyebut hal yang beneran ada, "don't leave context")
-3. roles/<role>.md            — fragment role spesifik (writer, reviewer, dst.)
+The system prompt is assembled from three layers, all optional:
+1. roles/common.md            — shared rules, always prepended when present
+2. `context_cmd` output       — FRESH grounding: a shell command run in the
+   workdir every iteration, its stdout injected (dtc's build_knowledge.py
+   pattern: the agent may only mention things that actually exist,
+   "don't leave context")
+3. roles/<role>.md            — role-specific fragment (writer, reviewer, ...)
 
-Hasil dipakai sebagai `--append-system-prompt` — beda dengan CLAUDE.md (Tier 1
-hot memory): CLAUDE.md dikurasi engine per-run, role/grounding statis per-config.
+The result is passed as `--append-system-prompt` — unlike CLAUDE.md (Tier 1 hot
+memory): CLAUDE.md is curated by the engine per run, role/grounding is static
+per config.
 """
 from __future__ import annotations
 
 import asyncio
 import os
 
-CONTEXT_CAP = 24_000  # chars — grounding gede bikin tiap iterasi mahal
+CONTEXT_CAP = 24_000  # chars — a huge grounding makes every iteration expensive
 CONTEXT_TIMEOUT_SEC = 60
 
 
 def role_prompt(cfg: dict, role: str) -> str:
-    """Baca roles/<role>.md. Role nggak ada = salah ketik → fail cepat & jelas."""
+    """Read roles/<role>.md. A missing role means a typo → fail fast and loudly."""
     path = os.path.join(cfg["paths"].get("roles", "roles"), f"{role}.md")
     if not os.path.isfile(path):
-        raise ValueError(f"role '{role}' tidak ada ({path})")
+        raise ValueError(f"role '{role}' does not exist ({path})")
     with open(path) as f:
         return f.read().strip()
 
@@ -37,8 +39,8 @@ def common_prompt(cfg: dict) -> str:
 
 
 async def run_context_cmd(cmd: str, *, cwd: str) -> str:
-    """Jalankan context_cmd, balikin stdout (di-cap). Gagal → warning, bukan fatal:
-    grounding itu bantuan, loop tetap harus jalan tanpa dia."""
+    """Run context_cmd, return its stdout (capped). Failure → a warning, not fatal:
+    grounding is an aid, the loop still has to work without it."""
     try:
         proc = await asyncio.create_subprocess_shell(
             cmd, cwd=cwd,
@@ -52,13 +54,13 @@ async def run_context_cmd(cmd: str, *, cwd: str) -> str:
         await proc.wait()
         return f"[context_cmd timeout {CONTEXT_TIMEOUT_SEC}s: {cmd}]"
     except OSError as e:
-        return f"[context_cmd gagal jalan: {e}]"
+        return f"[context_cmd failed to run: {e}]"
 
     text = out.decode("utf-8", "replace").strip()
     if proc.returncode != 0:
         return f"[context_cmd exit {proc.returncode}]\n{text[-2000:]}"
     if len(text) > CONTEXT_CAP:
-        text = text[:CONTEXT_CAP] + "\n[... grounding dipotong di cap]"
+        text = text[:CONTEXT_CAP] + "\n[... grounding truncated at the cap]"
     return text
 
 
@@ -66,7 +68,7 @@ async def build_system_prompt(
     cfg: dict, *, role: str | None = None, context_cmd: str | None = None,
     workdir: str = ".",
 ) -> str | None:
-    """Rakit system prompt: common + grounding + role. Kosong semua → None."""
+    """Assemble the system prompt: common + grounding + role. All empty → None."""
     parts: list[str] = []
     common = common_prompt(cfg)
     if common:
