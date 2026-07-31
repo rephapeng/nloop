@@ -1,19 +1,19 @@
-# Workspace jetorbit — masih kosong, isinya bakal disuruh bikin lewat bot.
+# Workspace jetorbit — still empty; the contents will be built by asking the bot.
 #
-# Yang perlu diisi sebelum ini berguna:
+# What has to be filled in before this is useful:
 #   1. .env  ->  TELEGRAM_BOT_TOKEN_JETORBIT + TELEGRAM_ALLOWED_CHAT_IDS_JETORBIT
-#      (bot SENDIRI dari BotFather — token Telegram nggak bisa dishare antar
-#      workspace, dua long-poll dengan token sama = 409 Conflict)
-#   2. telegram.agent_workdir  ->  path project jetorbit yang beneran
-#   3. triggers.projects / watchdog kalau mau auto-fix dari Sentry
+#      (its OWN bot from BotFather — a Telegram token can't be shared between
+#      workspaces, two long-polls on the same token = 409 Conflict)
+#   2. telegram.agent_workdir  ->  the real jetorbit project path
+#   3. triggers.projects / watchdog if you want auto-fix from Sentry
 label: Jetorbit
 
-# Chat bebas ke bot ini jalan sebagai session Claude Code di agent_workdir.
-# Dari situ bot bisa bikin loop sendiri (task/schedule) buat workspace ini.
+# Freeform chat with this bot runs as a Claude Code session in agent_workdir.
+# From there the bot can create its own loops (tasks/schedules) for this workspace.
 telegram:
   enabled: true
   notify: true
-  agent_workdir: workspaces/jetorbit/work   # TODO: ganti ke path project jetorbit
+  agent_workdir: workspaces/jetorbit/work   # TODO: point this at the jetorbit project path
   model: null
   model_smalltalk: sonnet
   thinking_tokens: 10000
@@ -21,12 +21,54 @@ telegram:
   max_turns: null
   progress_interval_sec: 60
 
-# Belum ada kerjaan tetap — task/schedule diisi belakangan (boleh lewat file
-# workspaces/jetorbit/tasks/<id>.yaml biar nggak numpuk di sini).
-tasks: {}
-schedules: {}
+# Task registry — definitions of work that can be called AGAIN with a different payload.
+# cve-watch: one task, many SOURCES (payload.source) — see SOURCES in
+# scripts/cve_watch.py to add a new source (feed + freshness rules).
+tasks:
+  cve-watch:
+    name: "CVE watch — security feeds"
+    description: >-
+      Check the security feeds (CloudLinux blog / The Hacker News etc.); when a new
+      CVE post shows up, read and investigate it, then report to the jetorbit
+      Telegram. No candidates -> the verifier passes immediately without touching
+      claude at all (free).
+    payload:
+      required: [source, slot]   # source: cloudlinux | thn — slot is only a run/idempotency label
+    goal: >-
+      Check for new CVE post candidates from source "{{source}}" (slot {{slot}}) —
+      the list is already in the grounding (`scripts/cve_watch.py check --source {{source}}`).
+      For EVERY candidate: fetch the full article, investigate it, then report to
+      Telegram via
+      `.venv/bin/python3 /opt/nloop/scripts/cve_watch.py notify --guid ... --title ... --text ...`.
+      Follow the format and investigation rules in the role. If the grounding is
+      empty (no candidates) there is nothing to do — the verifier passes on its own.
+    verify_cmd: ".venv/bin/python3 /opt/nloop/scripts/cve_watch.py verify --source {{source}}"
+    workdir: /opt/nloop
+    role: cve-watch
+    context_cmd: ".venv/bin/python3 /opt/nloop/scripts/cve_watch.py check --source {{source}}"
+    max_iterations: 5
+    max_cost_usd: 1.5
+    idempotency_key: "cve-watch:{{source}}:{{slot}}"   # 1 active run per source+slot, double triggers don't pile up
 
-# Webhook issue-fix: POST /api/hooks/sentry?workspace=jetorbit&project=<nama>&token=<token>
+# Scheduled loops. `at` = daily, UTC.
+schedules:
+  cve-watch-cloudlinux-pagi:
+    at: "01:00"             # UTC = 08:00 WIB
+    steps:
+      - task: cve-watch
+        payload: {source: cloudlinux, slot: pagi}
+  cve-watch-cloudlinux-sore:
+    at: "10:00"              # UTC = 17:00 WIB
+    steps:
+      - task: cve-watch
+        payload: {source: cloudlinux, slot: sore}
+  cve-watch-thn-harian:
+    at: "14:00"              # UTC = 21:00 WIB — late evening so most of that day's articles are already published
+    steps:
+      - task: cve-watch
+        payload: {source: thn, slot: harian}
+
+# Issue-fix webhook: POST /api/hooks/sentry?workspace=jetorbit&project=<name>&token=<token>
 triggers:
   token: null
   projects: {}
@@ -36,6 +78,6 @@ watchdog:
   organization: null
   projects: {}
 
-# Laporan promo itu punya onecookie — jangan ikut nyala di sini.
+# The promo report belongs to onecookie — don't let it switch on here too.
 promo_report:
   enabled: false
