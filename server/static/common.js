@@ -37,8 +37,80 @@ function runDuration(run) {
 
 const badge = (s) => `<span class="badge ${esc(s)}">${esc(s)}</span>`;
 
+// ---------- motion: scroll reveal ----------
+// IntersectionObserver polos, tanpa library. Elemen ber-class `reveal` mulai
+// transparan (lihat style.css, digate html.motion) dan dianimasiin begitu masuk
+// viewport. Aturan mainnya: animasi NGGAK BOLEH bikin konten ilang — kalau
+// observer nggak ada / reduced-motion / nggak pernah nembak, semua langsung tampil.
+
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const STAGGER_CAP = 12;          // item ke-13 dst. nggak usah nunggu makin lama
+
+const revealObs = (!REDUCED && 'IntersectionObserver' in window)
+  ? new IntersectionObserver((entries, obs) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        e.target.classList.add('in');
+        obs.unobserve(e.target);
+      }
+    }, {rootMargin: '0px 0px -6% 0px', threshold: 0.04})
+  : null;
+
+let safetyTimer = null;
+
+/** Amati semua `.reveal` yang belum kebuka di dalam root. */
+function reveal(root = document) {
+  const els = $$('.reveal:not(.in)', root);
+  if (!revealObs) {
+    els.forEach((el) => el.classList.add('in'));
+    return;
+  }
+  els.forEach((el) => revealObs.observe(el));
+  clearTimeout(safetyTimer);      // jaring pengaman: apa pun yang kejadian, konten muncul
+  safetyTimer = setTimeout(
+    () => $$('.reveal:not(.in)').forEach((el) => el.classList.add('in')), 1500);
+}
+
+/** Konten baru di-render → kasih .reveal + index stagger ke tiap anak, terus amati. */
+function revealChildren(container, sel = ':scope > *') {
+  if (!container) return;
+  $$(sel, container).forEach((el, i) => {
+    el.classList.add('reveal');
+    el.style.setProperty('--i', Math.min(i, STAGGER_CAP));
+  });
+  reveal(container);
+}
+
+// ---------- workspace ----------
+// Satu proses nloop nampung banyak workspace (tenant). Pilihannya disimpan di URL
+// (?ws=) biar link bisa di-share, DAN di localStorage biar nempel antar halaman.
+let WS = new URLSearchParams(location.search).get('ws')
+      || localStorage.getItem('nloop.ws') || '';
+let WORKSPACES = [];
+
+/** Tempel ?ws= ke link internal biar pindah halaman nggak balik ke workspace lain. */
+function withWs(href) {
+  if (!WS) return href;
+  const u = new URL(href, location.origin);
+  u.searchParams.set('ws', WS);
+  return u.pathname + u.search;
+}
+
+/** Semua panggilan /api/ otomatis di-scope ke workspace aktif. */
+function apiUrl(path) {
+  if (!WS || !path.startsWith('/api/')) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'workspace=' + encodeURIComponent(WS);
+}
+
+function setWs(name) {
+  WS = name || '';
+  if (WS) localStorage.setItem('nloop.ws', WS);
+  else localStorage.removeItem('nloop.ws');
+  location.href = withWs(location.pathname);   // reload halaman ini di workspace baru
+}
+
 async function api(path, opts) {
-  const r = await fetch(path, opts);
+  const r = await fetch(apiUrl(path), opts);
   if (!r.ok) {
     let msg = r.status + '';
     try {
@@ -69,13 +141,14 @@ function renderShell() {
   if (!side) return;
   const active = document.body.dataset.nav;
   side.innerHTML = `
-    <a class="brand" href="/">
+    <a class="brand" href="${withWs('/')}">
       <span class="logo">∞</span>
       <span class="brand-txt">nloop<small>loop engineering</small></span>
     </a>
+    <div id="ws-switch" class="ws-switch"></div>
     <nav class="nav">
       ${NAV.map((n) => `
-        <a class="nav-item ${n.key === active ? 'active' : ''}" href="${n.href}">
+        <a class="nav-item ${n.key === active ? 'active' : ''}" href="${withWs(n.href)}">
           <span class="ico">${n.icon}</span>${n.label}
           <span class="nav-count" data-count="${n.key}"></span>
         </a>`).join('')}
@@ -83,8 +156,38 @@ function renderShell() {
     <div class="side-foot">
       <span class="dot" id="health-dot"></span><span id="health-txt">connecting…</span>
     </div>`;
+  revealChildren($('.nav', side));
+  renderWorkspaces();
   pollShell();
   setInterval(pollShell, 5000);
+}
+
+/** Switcher workspace. Satu workspace doang → label diam aja (nggak usah dropdown). */
+async function renderWorkspaces() {
+  const el = $('#ws-switch');
+  if (!el) return;
+  let data;
+  try {
+    data = await api('/api/workspaces');
+  } catch {
+    return;                       // server lama tanpa endpoint ini — sidebar tetap jalan
+  }
+  WORKSPACES = data.workspaces || [];
+  if (!WS) WS = data.primary || '';
+  if (WORKSPACES.length < 2) {
+    const only = WORKSPACES[0];
+    el.innerHTML = only
+      ? `<span class="ws-one" title="workspace">🗂 ${esc(only.label)}</span>` : '';
+    return;
+  }
+  el.innerHTML = `
+    <select id="ws-select" class="select" title="workspace">
+      ${WORKSPACES.map((w) => `
+        <option value="${esc(w.name)}" ${w.name === WS ? 'selected' : ''}>
+          🗂 ${esc(w.label)}${w.active ? ` (${w.active})` : ''}
+        </option>`).join('')}
+    </select>`;
+  $('#ws-select').onchange = (e) => setWs(e.target.value);
 }
 
 async function pollShell() {
@@ -117,3 +220,4 @@ function showError(msg) {
 }
 
 renderShell();
+reveal();                        // section statis yang udah nulis class="reveal" di HTML

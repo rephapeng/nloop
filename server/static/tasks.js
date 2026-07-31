@@ -34,6 +34,7 @@ async function initTasks() {
     : `<div class="empty">Registry masih kosong.<br>
        Isi <code>tasks:</code> di <code>config.yaml</code> atau bikin
        <code>tasks/&lt;id&gt;.yaml</code>, terus restart nloop.</div>`;
+  revealChildren($('#tasks'));
 }
 
 // ---------- detail ----------
@@ -165,6 +166,8 @@ async function initTaskDetail() {
   const runs = t.runs || [];
   $('#task-runs').innerHTML = runs.length ? runs.map(runRowMini).join('')
     : '<tr><td colspan="7"><div class="empty">Belum ada run buat task ini.</div></td></tr>';
+  revealChildren($('#task-runs'), ':scope > tr');
+  reveal();                     // panel spec & form baru keisi — amati ulang
   document.addEventListener('click', (e) => {
     const row = e.target.closest('#task-runs [data-goto]');
     if (row) location.href = row.dataset.goto;

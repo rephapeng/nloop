@@ -6,34 +6,35 @@
   <title>nloop — task</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔁</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
+  <script>document.documentElement.classList.add('motion');</script>
 </head>
 <body data-page="task" data-nav="tasks">
 
   <aside class="sidebar" id="sidebar"></aside>
 
   <main class="content">
-    <header class="page-head">
+    <header class="page-head reveal">
       <h1><a href="/tasks" class="crumb-link">Tasks</a> / <code id="task-id">…</code></h1>
     </header>
 
-    <section class="card pad">
+    <section class="card pad reveal">
       <h2 class="card-title" id="task-name">…</h2>
       <p class="faint" id="task-desc"></p>
     </section>
 
     <div class="two-col">
-      <section>
+      <section class="reveal">
         <h2 class="sect">Test task</h2>
         <div class="card pad" id="test-panel"></div>
       </section>
-      <section>
+      <section class="reveal" style="--i:1">
         <h2 class="sect">Definisi</h2>
         <div class="card pad" id="spec"></div>
       </section>
     </div>
 
-    <h2 class="sect">Run terakhir</h2>
-    <div class="table-wrap card">
+    <h2 class="sect reveal">Run terakhir</h2>
+    <div class="table-wrap card reveal">
       <table class="tbl">
         <thead>
           <tr><th>Status</th><th>Run</th><th>Payload</th><th class="num">Iterasi</th>

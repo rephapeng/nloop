@@ -6,13 +6,14 @@
   <title>nloop — runs</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔁</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
+  <script>document.documentElement.classList.add('motion');</script>
 </head>
 <body data-page="index" data-nav="runs">
 
   <aside class="sidebar" id="sidebar"></aside>
 
   <main class="content">
-    <header class="page-head">
+    <header class="page-head reveal">
       <h1>Runs<span class="count" id="count"></span></h1>
       <span class="spacer"></span>
       <button class="primary" id="toggle-form" type="button">＋ New loop</button>
@@ -61,9 +62,9 @@
         Bikin task di <a href="/tasks">Tasks</a>.</p>
     </form>
 
-    <div class="filters" id="filters"></div>
+    <div class="filters reveal" id="filters"></div>
 
-    <div class="table-wrap card">
+    <div class="table-wrap card reveal">
       <table class="tbl">
         <thead>
           <tr>

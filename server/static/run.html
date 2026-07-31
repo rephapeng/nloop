@@ -6,13 +6,14 @@
   <title>nloop — run</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🔁</text></svg>">
   <link rel="stylesheet" href="/static/style.css">
+  <script>document.documentElement.classList.add('motion');</script>
 </head>
 <body data-page="run" data-nav="runs">
 
   <aside class="sidebar" id="sidebar"></aside>
 
   <main class="content">
-    <header class="page-head">
+    <header class="page-head reveal">
       <h1><a href="/" class="crumb-link">Runs</a> / <span id="crumb-task"></span>
         <code id="run-id"></code></h1>
       <span class="spacer"></span>
@@ -20,7 +21,7 @@
       <button id="stop" class="danger" style="display:none">Stop</button>
     </header>
 
-    <section class="card run-head">
+    <section class="card run-head reveal">
       <p class="goal-big" id="goal">…</p>
       <div class="chips" id="chips"></div>
       <div class="gauges">
@@ -35,8 +36,8 @@
       </div>
     </section>
 
-    <h2 class="sect">Trace</h2>
-    <div class="trace-layout">
+    <h2 class="sect reveal">Trace</h2>
+    <div class="trace-layout reveal">
       <div class="card waterfall-wrap">
         <div class="wf-head">
           <span>span</span><span>timeline</span><span class="num">durasi</span>
@@ -48,15 +49,18 @@
       </aside>
     </div>
 
-    <h2 class="sect">Log</h2>
-    <div class="log-bar" id="log-filter">
+    <h2 class="sect reveal">Log</h2>
+    <div class="log-bar reveal" id="log-filter">
       <button class="pill on" data-filter="all">semua</button>
       <button class="pill" data-filter="turn">turn</button>
       <button class="pill" data-filter="tool">tool</button>
       <button class="pill" data-filter="verify">verify / gate</button>
       <button class="pill" data-filter="warn">warning</button>
     </div>
-    <div id="live" class="card"></div>
+    <div class="log-wrap">
+      <div id="live" class="card"></div>
+      <button id="jump-live" class="jump-live" type="button" hidden>↓ log terbaru</button>
+    </div>
   </main>
 
   <script src="/static/common.js"></script>

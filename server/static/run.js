@@ -74,6 +74,15 @@ function orderSpans(spans) {
   return out;
 }
 
+/** Pilih span tanpa gambar ulang seluruh waterfall (biar nggak kedip). */
+function selectSpan(id) {
+  selected = id;
+  $$('#waterfall .span-row').forEach((el) => el.classList.toggle('sel', el.dataset.span === id));
+  renderSpanDetail();
+}
+
+let tracePainted = false;
+
 function renderTrace(t) {
   traceData = t;
   const total = Math.max(0.001, t.end - t.start);
@@ -97,11 +106,15 @@ function renderTrace(t) {
       </div>`;
   }).join('');
 
-  $$('#waterfall .span-row').forEach((el) => el.addEventListener('click', () => {
-    selected = el.dataset.span;
-    renderTrace(traceData);
-    renderSpanDetail();
-  }));
+  $$('#waterfall .span-row').forEach((el) => el.addEventListener('click',
+    () => selectSpan(el.dataset.span)));
+
+  if (!tracePainted) {         // bar tumbuh dari kiri, sekali doang pas pertama digambar
+    tracePainted = true;
+    const wrap = $('.waterfall-wrap');
+    wrap.classList.add('first-paint');
+    setTimeout(() => wrap.classList.remove('first-paint'), 900);
+  }
   if (selected) renderSpanDetail();
 }
 
@@ -167,13 +180,31 @@ function initLogFilter() {
 
 function streamEvents() {
   const live = $('#live');
+  const jump = $('#jump-live');
+
+  // Dulu tiap event maksa scrollTop ke bawah — pas lagi baca log ke atas, layarnya
+  // ketarik terus. Sekarang auto-scroll cuma kalau user emang lagi nempel di bawah;
+  // kalau nggak, tombol "↓ log terbaru" yang muncul.
+  const atBottom = () => live.scrollHeight - live.scrollTop - live.clientHeight < 48;
+  let stick = true;
+  live.addEventListener('scroll', () => {
+    stick = atBottom();
+    jump.hidden = stick;
+  });
+  jump.addEventListener('click', () => {
+    stick = true;
+    jump.hidden = true;
+    live.scrollTo({top: live.scrollHeight, behavior: REDUCED ? 'auto' : 'smooth'});
+  });
+
   const add = (cls, group, text) => {
     const div = document.createElement('div');
     div.className = `ev ${cls} f-${group}`;
     div.textContent = text;
     div.hidden = logFilter !== 'all' && group !== logFilter;
     live.appendChild(div);
-    live.scrollTop = live.scrollHeight;
+    if (stick) live.scrollTop = live.scrollHeight;
+    else jump.hidden = false;
   };
   const data = (e) => JSON.parse(e.data);
   let dirty = false;

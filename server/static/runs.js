@@ -14,6 +14,7 @@ function readFilters() {
 
 function writeFilters() {
   const p = new URLSearchParams();
+  if (WS) p.set('ws', WS);          // jangan ilang pas filter ditulis ulang
   for (const [k, v] of Object.entries(filters)) if (v) p.set(k, v);
   const qs = p.toString();
   history.replaceState(null, '', qs ? `/?${qs}` : '/');
@@ -52,15 +53,20 @@ function renderFilterBar() {
   });
 }
 
+const iterPct = (r) => Math.min(100, (r.iterations_done / (r.max_iterations || 1)) * 100);
+const barCls = (r) => r.status === 'succeeded' ? 'ok' : r.status === 'failed' ? 'bad' : '';
+const costCell = (r) => `<b>${fmtCost(r.cost_total)}</b><div class="sub">/ ${
+  fmtCost(r.max_cost_usd)}</div>`;
+const stopCell = (r) => ACTIVE.includes(r.status)
+  ? `<button class="danger small" data-stop="${esc(r.id)}">Stop</button>` : '';
+
 function runRow(r) {
-  const pct = Math.min(100, (r.iterations_done / (r.max_iterations || 1)) * 100);
-  const barCls = r.status === 'succeeded' ? 'ok' : r.status === 'failed' ? 'bad' : '';
   const goal = (r.goal || '').split('\n')[0];
   const src = r.fingerprint && r.fingerprint.startsWith('schedule:')
     ? `🗓 ${esc(r.fingerprint.slice(9))}` : '';
   return `
-    <tr data-goto="/run/${esc(r.id)}">
-      <td>${badge(r.status)}</td>
+    <tr data-goto="/run/${esc(r.id)}" data-id="${esc(r.id)}">
+      <td data-c="status">${badge(r.status)}</td>
       <td class="cell-goal">
         <div class="goal" title="${esc(r.goal)}">${esc(goal)}</div>
         <div class="sub"><code>${esc(r.id)}</code>${src ? ' · ' + src : ''}${
@@ -69,18 +75,59 @@ function runRow(r) {
       <td>${r.task_id
         ? `<a class="chip task" href="/tasks/${esc(r.task_id)}">⚡ ${esc(r.task_id)}</a>`
         : '<span class="faint">—</span>'}</td>
-      <td class="num">
+      <td class="num" data-c="iter">
         <div class="nums"><b>${r.iterations_done}</b>/${r.max_iterations}</div>
-        <div class="bar ${barCls}"><i style="width:${pct}%"></i></div>
+        <div class="bar ${barCls(r)}"><i style="width:${iterPct(r)}%"></i></div>
       </td>
-      <td class="num"><b>${fmtCost(r.cost_total)}</b><div class="sub">/ ${
-        fmtCost(r.max_cost_usd)}</div></td>
-      <td class="num">${runDuration(r)}</td>
-      <td class="num" title="${new Date((r.created_at || 0) * 1000).toLocaleString()}">${
-        timeAgo(r.created_at)}</td>
-      <td class="num">${ACTIVE.includes(r.status)
-        ? `<button class="danger small" data-stop="${esc(r.id)}">Stop</button>` : ''}</td>
+      <td class="num" data-c="cost">${costCell(r)}</td>
+      <td class="num" data-c="dur">${runDuration(r)}</td>
+      <td class="num" data-c="ago" title="${
+        new Date((r.created_at || 0) * 1000).toLocaleString()}">${timeAgo(r.created_at)}</td>
+      <td class="num" data-c="stop">${stopCell(r)}</td>
     </tr>`;
+}
+
+/** Update sel yang berubah aja, tanpa bongkar <tr>-nya. */
+function updateRow(tr, r) {
+  if (!tr) return;
+  const set = (c, html) => {
+    const td = tr.querySelector(`[data-c="${c}"]`);
+    if (td && td.innerHTML !== html) td.innerHTML = html;
+  };
+  set('status', badge(r.status));
+  set('cost', costCell(r));
+  set('dur', runDuration(r));
+  set('ago', timeAgo(r.created_at));
+  set('stop', stopCell(r));
+
+  const cell = tr.querySelector('[data-c="iter"]');
+  if (!cell) return;
+  const nums = `<b>${r.iterations_done}</b>/${r.max_iterations}`;
+  if (cell.querySelector('.nums').innerHTML !== nums) cell.querySelector('.nums').innerHTML = nums;
+  // bar-nya dipertahankan (bukan di-render ulang) supaya `transition: width` beneran jalan
+  const bar = cell.querySelector('.bar');
+  bar.className = `bar ${barCls(r)}`.trim();
+  bar.querySelector('i').style.width = iterPct(r) + '%';
+}
+
+// Polling tiap 3 detik dulu nulis ulang innerHTML seluruh tbody: bar progres nggak
+// pernah sempat transisi, hover ke-reset, dan teks yang lagi diblok ilang. Sekarang
+// DOM cuma dibongkar kalau daftar run-nya emang beda.
+let painted = null;
+
+function paintRows(runs) {
+  const tb = $('#runs');
+  const ids = runs.map((r) => r.id).join(',');
+  if (ids === painted) {
+    runs.forEach((r) => updateRow(tb.querySelector(`tr[data-id="${CSS.escape(r.id)}"]`), r));
+    return;
+  }
+  painted = ids;
+  tb.innerHTML = runs.length ? runs.map(runRow).join('')
+    : `<tr><td colspan="8"><div class="empty">Belum ada run yang cocok.<br>
+       Bikin lewat <b>＋ New loop</b>, halaman <a href="/tasks">Tasks</a>,
+       CLI <code>bin/nloop run</code>, schedule, webhook, atau Telegram.</div></td></tr>`;
+  revealChildren(tb, ':scope > tr');
 }
 
 function matches(r) {
@@ -102,10 +149,7 @@ async function refresh() {
     return;
   }
   $('#count').textContent = runs.length ? `${runs.length} run${runs.length > 1 ? 's' : ''}` : '';
-  $('#runs').innerHTML = runs.length ? runs.map(runRow).join('')
-    : `<tr><td colspan="8"><div class="empty">Belum ada run yang cocok.<br>
-       Bikin lewat <b>＋ New loop</b>, halaman <a href="/tasks">Tasks</a>,
-       CLI <code>bin/nloop run</code>, schedule, webhook, atau Telegram.</div></td></tr>`;
+  paintRows(runs);
 }
 
 async function loadTaskOptions() {
@@ -119,7 +163,11 @@ function initForm() {
   $('#toggle-form').addEventListener('click', () => {
     const f = $('#new-loop');
     f.hidden = !f.hidden;
-    if (!f.hidden) f.querySelector('[name=goal]').focus();
+    if (f.hidden) return;
+    f.classList.remove('opening');
+    void f.offsetWidth;                 // reflow: paksa animasi mulai ulang tiap dibuka
+    f.classList.add('opening');
+    f.querySelector('[name=goal]').focus();
   });
 
   $('#new-loop').addEventListener('submit', async (e) => {
