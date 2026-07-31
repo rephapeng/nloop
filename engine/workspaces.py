@@ -96,6 +96,7 @@ def _load_one(cfg: dict, root: str, name: str) -> dict:
             ws["paths"][key] = local
 
     ws["workspace"] = name
+    ws["paths"]["ws_config"] = path      # sumber kedua buat tasks.refresh()
     ws["tasks"] = tasks.load_registry(ws)
     return ws
 

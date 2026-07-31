@@ -208,6 +208,20 @@ def test_list_tasks(client_tasks):
     assert items[0]["last_run"] is None
 
 
+def test_task_file_baru_kebaca_tanpa_restart(client_tasks, tmp_path):
+    """Bikin tasks/<id>.yaml pas server lagi jalan → langsung nongol di registry."""
+    assert [t["id"] for t in client_tasks.get("/api/tasks").json()] == ["buat-file"]
+
+    tasks_dir = tmp_path / "tasks-kosong"
+    tasks_dir.mkdir(exist_ok=True)
+    (tasks_dir / "halo.yaml").write_text(
+        f"name: Halo\ngoal: bilang halo\nverify_cmd: 'true'\nworkdir: {tmp_path}\n")
+
+    items = client_tasks.get("/api/tasks").json()
+    assert sorted(t["id"] for t in items) == ["buat-file", "halo"]
+    assert client_tasks.get("/api/tasks/halo").json()["name"] == "Halo"
+
+
 def test_trigger_task_runs_to_success(client_tasks):
     r = client_tasks.post("/api/tasks/buat-file/trigger",
                           json={"payload": {"file": "done.txt"}})

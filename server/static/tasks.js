@@ -32,8 +32,8 @@ async function initTasks() {
   } catch (e) { return showError(e.message); }
   $('#tasks').innerHTML = items.length ? items.map(taskCard).join('')
     : `<div class="empty">Registry masih kosong.<br>
-       Isi <code>tasks:</code> di <code>config.yaml</code> atau bikin
-       <code>tasks/&lt;id&gt;.yaml</code>, terus restart nloop.</div>`;
+       Bikin <code>tasks/&lt;id&gt;.yaml</code> (atau isi <code>tasks:</code> di
+       <code>config.yaml</code>) — kebaca sendiri, nggak usah restart nloop.</div>`;
   revealChildren($('#tasks'));
 }
 

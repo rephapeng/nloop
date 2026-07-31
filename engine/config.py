@@ -91,6 +91,9 @@ def load(path: str = "config.yaml") -> dict:
             user = yaml.safe_load(f) or {}
         for section, values in user.items():
             cfg.setdefault(section, {}).update(values or {})
+    # Dicatat biar registry task bisa baca ulang file ini pas ada perubahan
+    # (lihat tasks.refresh) — nambah task nggak perlu restart server.
+    cfg["paths"] = {**cfg.get("paths", {}), "config": path}
     return cfg
 
 

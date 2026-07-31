@@ -248,6 +248,7 @@ def create_app(cfg: dict | None = None) -> FastAPI:
         store: Store = request.app.state.store
         ws = ws_of(request, workspace)
         ws_name = ws.get("workspace")
+        tasks.refresh(ws)                # task baru kebaca tanpa restart
         registry = ws.get("tasks") or {}
         out = []
         for task_id, spec in registry.items():

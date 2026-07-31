@@ -55,15 +55,23 @@ class TaskError(ValueError):
 
 # ---- registry ----
 
-def load_registry(cfg: dict) -> dict[str, dict]:
+def load_registry(cfg: dict, inline: dict | None = None) -> dict[str, dict]:
     """Gabung `tasks:` config.yaml + file `<paths.tasks>/<id>.yaml`.
 
     File di direktori menang atas config.yaml (pola "task as code": definisinya
     ikut repo, bukan numpuk di satu config raksasa). Spec rusak di-LOG dan
     di-skip — satu task salah ketik nggak boleh matiin server.
+
+    `inline` = task yang didefinisiin di config (dipakai `refresh()` yang baca
+    ulang dari disk). Kosong → ambil dari `cfg["tasks"]` seperti waktu boot.
     """
     registry: dict[str, dict] = {}
-    for task_id, spec in (cfg.get("tasks") or {}).items():
+    if inline is None:
+        # Snapshot task dari config SEBELUM cfg["tasks"] ketimpa hasil merge —
+        # `refresh()` butuh yang asli, bukan registry gabungan.
+        inline = {str(k): dict(v or {}) for k, v in (cfg.get("tasks") or {}).items()}
+        cfg[INLINE_KEY] = inline
+    for task_id, spec in inline.items():
         registry[str(task_id)] = dict(spec or {})
 
     tasks_dir = (cfg.get("paths") or {}).get("tasks")
@@ -96,6 +104,93 @@ def load_registry(cfg: dict) -> dict[str, dict]:
     return valid
 
 
+# ---- hot reload ----
+# Nambah/ngedit task nggak boleh butuh `systemctl restart nloop`. Registry-nya
+# baca ulang sendiri begitu file sumbernya berubah — dicek lewat (path, mtime,
+# size) tiap kali registry dibaca. Cuma stat() beberapa file, murah.
+
+STAMP_KEY = "_tasks_stamp"     # sidik jari sumber terakhir, nempel di cfg workspace
+INLINE_KEY = "_tasks_inline"   # task dari config, disnapshot waktu boot
+SOURCE_KEYS = ("config", "ws_config")   # paths.* → file config yang punya `tasks:`
+
+
+def _sig(path: str) -> tuple:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return ()
+    return (st.st_mtime_ns, st.st_size)
+
+
+def source_files(cfg: dict) -> list[str]:
+    """Semua file yang ikut nentuin isi registry, urut deterministik."""
+    paths = cfg.get("paths") or {}
+    files = [paths[k] for k in SOURCE_KEYS
+             if paths.get(k) and os.path.exists(paths[k])]
+    tasks_dir = paths.get("tasks")
+    if tasks_dir and os.path.isdir(tasks_dir):
+        files += [os.path.join(tasks_dir, f) for f in sorted(os.listdir(tasks_dir))
+                  if f.endswith((".yaml", ".yml"))]
+    return files
+
+
+def source_stamp(cfg: dict) -> tuple:
+    return tuple((p, _sig(p)) for p in source_files(cfg))
+
+
+def _inline_from_disk(cfg: dict) -> dict[str, dict]:
+    """Baca ulang section `tasks:` dari file config (global, lalu workspace —
+    workspace menang, sama kayak waktu boot di workspaces._load_one)."""
+    paths = cfg.get("paths") or {}
+    out: dict[str, dict] = {}
+    for key in SOURCE_KEYS:
+        path = paths.get(key)
+        if not path or not os.path.exists(path):
+            continue
+        try:
+            with open(path) as f:
+                doc = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError) as e:
+            log.error("config %s nggak kebaca pas reload task, dilewat: %s", path, e)
+            continue
+        if not isinstance(doc, dict):
+            continue
+        for task_id, spec in (doc.get("tasks") or {}).items():
+            out[str(task_id)] = dict(spec or {})
+    return out
+
+
+def refresh(cfg: dict) -> bool:
+    """Baca ulang registry kalau ada file sumber yang berubah. True = berubah.
+
+    Dipanggil di jalur baca (`get()`, GET /api/tasks) — jadi task baru langsung
+    kepake sama REST, CLI, scheduler, webhook, dan Telegram tanpa restart.
+    """
+    stamp = source_stamp(cfg)
+    if STAMP_KEY not in cfg:
+        # Panggilan pertama cuma nyatet sidik jari: registry-nya baru aja dibangun
+        # dari file yang sama (atau di-set langsung di memori) — jangan ditimpa.
+        cfg[STAMP_KEY] = stamp
+        return False
+    if stamp == cfg[STAMP_KEY]:
+        return False
+    cfg[STAMP_KEY] = stamp
+    before = set(cfg.get("tasks") or {})
+    # cfg yang dibikin manual (dipakai sebagai library, atau test) nggak nunjuk
+    # file config beneran — nggak ada yang bisa dibaca ulang, jadi `tasks:`-nya
+    # pakai snapshot waktu boot dan cuma direktori tasks/ yang hot-reload.
+    paths = cfg.get("paths") or {}
+    has_config = any(paths.get(k) and os.path.exists(paths[k]) for k in SOURCE_KEYS)
+    inline = _inline_from_disk(cfg) if has_config else cfg.get(INLINE_KEY)
+    cfg["tasks"] = load_registry(cfg, inline=inline)
+    after = set(cfg["tasks"])
+    if before != after:
+        added, gone = sorted(after - before), sorted(before - after)
+        log.info("tasks reload (%s): +%s -%s", cfg.get("workspace", "?"),
+                 added or "-", gone or "-")
+    return True
+
+
 def validate(task_id: str, spec: dict) -> None:
     if not isinstance(spec, dict):
         raise TaskError("spec harus mapping")
@@ -115,6 +210,7 @@ def validate(task_id: str, spec: dict) -> None:
 
 
 def get(cfg: dict, task_id: str) -> dict:
+    refresh(cfg)               # task yang baru ditulis ke disk langsung kepake
     spec = (cfg.get("tasks") or {}).get(task_id)
     if spec is None:
         raise TaskError(f"task '{task_id}' nggak ada di registry")

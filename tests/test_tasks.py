@@ -170,6 +170,89 @@ def test_load_registry_skip_spec_rusak(tmp_path, caplog):
     assert list(registry) == ["ok"]
 
 
+# ---- hot reload ----
+# Nambah task nggak boleh butuh restart server (lihat tasks.refresh).
+
+@pytest.fixture
+def hot(tmp_path):
+    """cfg dengan direktori tasks/ kosong, registry udah ke-load sekali."""
+    tasks_dir = tmp_path / "tasks"
+    tasks_dir.mkdir()
+    cfg = config.load("/nonexistent")
+    cfg["tasks"] = {"lama": {"goal": "g", "verify_cmd": "v"}}
+    cfg["paths"]["tasks"] = str(tasks_dir)
+    cfg["tasks"] = tasks.load_registry(cfg)
+    tasks.refresh(cfg)                    # panggilan pertama: cuma nyatet stamp
+    return cfg, tasks_dir
+
+
+def test_refresh_tanpa_perubahan_nggak_ngapa_ngapain(hot):
+    cfg, _ = hot
+    assert tasks.refresh(cfg) is False
+    assert list(cfg["tasks"]) == ["lama"]
+
+
+def test_refresh_nangkep_task_file_baru(hot):
+    cfg, tasks_dir = hot
+    (tasks_dir / "baru.yaml").write_text("goal: g\nverify_cmd: v\n")
+    assert tasks.refresh(cfg) is True
+    assert sorted(cfg["tasks"]) == ["baru", "lama"]
+
+
+def test_get_nangkep_task_baru_tanpa_reload_manual(hot):
+    """Jalur yang kepake REST/CLI/scheduler: tasks.get() nge-refresh sendiri."""
+    cfg, tasks_dir = hot
+    with pytest.raises(tasks.TaskError):
+        tasks.get(cfg, "baru")
+    (tasks_dir / "baru.yaml").write_text("goal: g baru\nverify_cmd: v\n")
+    assert tasks.get(cfg, "baru")["goal"] == "g baru"
+
+
+def test_refresh_nangkep_edit_dan_hapus(hot):
+    cfg, tasks_dir = hot
+    f = tasks_dir / "baru.yaml"
+    f.write_text("goal: versi 1\nverify_cmd: v\n")
+    tasks.refresh(cfg)
+    f.write_text("goal: versi 2\nverify_cmd: v\n")
+    assert tasks.refresh(cfg) is True
+    assert cfg["tasks"]["baru"]["goal"] == "versi 2"
+    f.unlink()
+    assert tasks.refresh(cfg) is True
+    assert list(cfg["tasks"]) == ["lama"]
+
+
+def test_refresh_pertahanin_task_dari_config(hot):
+    """Reload nggak boleh ngilangin task yang didefinisiin di config.yaml."""
+    cfg, tasks_dir = hot
+    (tasks_dir / "baru.yaml").write_text("goal: g\nverify_cmd: v\n")
+    tasks.refresh(cfg)
+    assert "lama" in cfg["tasks"]
+
+
+def test_refresh_spec_rusak_nggak_ngerusak_registry(hot, caplog):
+    cfg, tasks_dir = hot
+    (tasks_dir / "rusak.yaml").write_text("goal: tanpa verify_cmd\n")
+    tasks.refresh(cfg)
+    assert list(cfg["tasks"]) == ["lama"]
+
+
+def test_refresh_baca_ulang_tasks_dari_file_config(tmp_path):
+    """Kalau paths.config nunjuk file beneran, `tasks:` di situ ikut hot-reload."""
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text("tasks:\n  a:\n    goal: versi 1\n    verify_cmd: v\n")
+    cfg = config.load(str(cfg_file))
+    cfg["paths"]["tasks"] = str(tmp_path / "kosong")
+    cfg["tasks"] = tasks.load_registry(cfg)
+    tasks.refresh(cfg)
+    assert cfg["tasks"]["a"]["goal"] == "versi 1"
+
+    cfg_file.write_text("tasks:\n  a:\n    goal: versi 2\n    verify_cmd: v\n"
+                        "  b:\n    goal: g\n    verify_cmd: v\n")
+    assert tasks.refresh(cfg) is True
+    assert cfg["tasks"]["a"]["goal"] == "versi 2"
+    assert sorted(cfg["tasks"]) == ["a", "b"]
+
+
 def test_summary_ringkas(cfg):
     s = tasks.summary("promo-post", cfg["tasks"]["promo-post"])
     assert s["id"] == "promo-post" and s["required"] == ["slot"]
