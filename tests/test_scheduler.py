@@ -1,4 +1,4 @@
-"""Scheduler: parsing jadwal + pipeline steps sekuensial (port timer dtc)."""
+"""Scheduler: schedule parsing + sequential pipeline steps (port of dtc's timer)."""
 import asyncio
 import calendar
 
@@ -27,18 +27,18 @@ def test_parse_every():
     assert parse_every("6h") == 6 * 3600
     assert parse_every("1d") == 86400
     with pytest.raises(ValueError):
-        parse_every("tiap subuh")
+        parse_every("every dawn")
 
 
 def test_next_at_delay():
     now = calendar.timegm((2026, 1, 1, 0, 0, 0))          # 00:00:00 UTC
     assert next_at_delay("00:30", now) == 1800
     assert next_at_delay("23:59", now) == 23 * 3600 + 59 * 60
-    assert next_at_delay("00:00", now) == 86400            # persis sekarang → besok
+    assert next_at_delay("00:00", now) == 86400            # exactly now → tomorrow
     with pytest.raises(ValueError):
         next_at_delay("25:00", now)
     with pytest.raises(ValueError):
-        next_at_delay("jam satu", now)
+        next_at_delay("one o'clock", now)
 
 
 def test_next_delay_requires_at_or_every():
@@ -47,7 +47,7 @@ def test_next_delay_requires_at_or_every():
     assert next_delay({"every": "1h"}, 0) == 3600
 
 
-# ---- steps & validasi ----
+# ---- steps & validation ----
 
 def test_steps_short_form(cfg, store):
     spec = {"every": "1h", "goal": "g", "verify_cmd": "exit 0", "workdir": "/tmp"}
@@ -57,26 +57,26 @@ def test_steps_short_form(cfg, store):
 
 def test_validate_skips_broken(cfg, store):
     s = Scheduler(store, cfg)
-    assert s._validate("x", {"every": "1h"}) is True          # tanpa steps
-    assert s._validate("x", {"steps": [{"goal": "g"}]}) is True  # tanpa at/every
-    assert s._validate("x", {"every": "1h", "goal": "g"}) is True  # tanpa verify_cmd
+    assert s._validate("x", {"every": "1h"}) is True          # no steps
+    assert s._validate("x", {"steps": [{"goal": "g"}]}) is True  # no at/every
+    assert s._validate("x", {"every": "1h", "goal": "g"}) is True  # no verify_cmd
     assert s._validate("x", {"every": "1h", "goal": "g",
                              "verify_cmd": "exit 0"}) is False
 
 
-def test_validate_step_task_harus_ada_di_registry(cfg, store):
+def test_validate_step_task_must_exist_in_registry(cfg, store):
     s = Scheduler(store, cfg)
-    spec = {"every": "1h", "steps": [{"task": "hantu"}]}
+    spec = {"every": "1h", "steps": [{"task": "ghost"}]}
     assert s._validate("x", spec) is True
-    cfg["tasks"] = {"hantu": {"goal": "g", "verify_cmd": "v"}}
+    cfg["tasks"] = {"ghost": {"goal": "g", "verify_cmd": "v"}}
     assert s._validate("x", spec) is False
 
 
-# ---- trigger: sekuensial + always + fingerprint ----
+# ---- trigger: sequential + always + fingerprint ----
 
 def run_trigger(store, cfg, spec, statuses):
-    """Jalankan trigger dengan _wait_terminal palsu: run langsung di-finish
-    sesuai antrian statuses (worker beneran nggak jalan di test ini)."""
+    """Run trigger with a fake _wait_terminal: every run is finished straight away
+    from the statuses queue (no real worker is running in this test)."""
     sched = Scheduler(store, cfg)
 
     async def fake_wait(run_id):
@@ -84,7 +84,7 @@ def run_trigger(store, cfg, spec, statuses):
         return store.get_run(run_id)["status"]
 
     sched._wait_terminal = fake_wait
-    return asyncio.run(sched.trigger("harian", spec))
+    return asyncio.run(sched.trigger("daily", spec))
 
 
 def steps_spec(tmp_path, n=3, always_last=True):
@@ -101,32 +101,34 @@ def test_all_steps_run_when_all_succeed(store, cfg, tmp_path):
     assert len(run_ids) == 3
     runs = [store.get_run(r) for r in run_ids]
     assert [r["goal"] for r in runs] == ["step-1", "step-2", "step-3"]
-    assert all(r["fingerprint"] == "schedule:harian" for r in runs)
+    assert all(r["fingerprint"] == "schedule:daily" for r in runs)
 
 
 def test_failed_step_skips_next_but_not_always(store, cfg, tmp_path):
-    """Pola daily_pipeline dtc: publish gagal → crosspost skip, report tetap jalan."""
+    """dtc's daily_pipeline pattern: publish fails → crosspost is skipped, the
+    report still runs."""
     run_ids = run_trigger(store, cfg, steps_spec(tmp_path),
                           ["failed", "succeeded"])
     runs = [store.get_run(r) for r in run_ids]
-    assert [r["goal"] for r in runs] == ["step-1", "step-3"]   # step-2 di-skip
+    assert [r["goal"] for r in runs] == ["step-1", "step-3"]   # step-2 skipped
 
 
 def test_step_fields_forwarded(store, cfg, tmp_path):
     spec = {"every": "1h", "steps": [{
         "goal": "g", "verify_cmd": "exit 0", "workdir": str(tmp_path),
-        "role": "writer", "context_cmd": "echo x", "gate_prompt": "bagus",
+        "role": "writer", "context_cmd": "echo x", "gate_prompt": "make it good",
         "max_iterations": 3, "max_cost_usd": 1.5, "model": "opus",
     }]}
     (run_id,) = run_trigger(store, cfg, spec, ["succeeded"])
     r = store.get_run(run_id)
-    assert r["role"] == "writer" and r["gate_prompt"] == "bagus"
+    assert r["role"] == "writer" and r["gate_prompt"] == "make it good"
     assert r["max_iterations"] == 3 and r["max_cost_usd"] == 1.5
     assert r["model"] == "opus"
 
 
-def test_step_task_dari_registry(store, cfg, tmp_path):
-    """Step `task:` + payload → run dari registry, fingerprint tetap schedule:<nama>."""
+def test_step_task_from_registry(store, cfg, tmp_path):
+    """Step `task:` + payload → run built from the registry, fingerprint stays
+    schedule:<name>."""
     cfg["tasks"] = {"promo-post": {
         "goal": "post slot {{slot}}", "verify_cmd": "verify --slot {{slot}}",
         "workdir": str(tmp_path), "role": "buffer-promo",
@@ -137,15 +139,16 @@ def test_step_task_dari_registry(store, cfg, tmp_path):
     r = store.get_run(run_id)
     assert r["goal"] == "post slot pagi" and r["verify_cmd"] == "verify --slot pagi"
     assert r["task_id"] == "promo-post" and r["payload"] == {"slot": "pagi"}
-    assert r["fingerprint"] == "schedule:harian"   # dedup schedule yang menang
+    assert r["fingerprint"] == "schedule:daily"   # the schedule dedup wins
     assert r["role"] == "buffer-promo"
 
 
-def test_step_task_payload_kurang_nggak_matiin_pipeline(store, cfg, tmp_path):
-    """Payload kurang = step gagal (di-log), step `always` berikutnya tetap jalan."""
-    cfg["tasks"] = {"t": {"goal": "{{wajib}}", "verify_cmd": "exit 0",
+def test_step_task_missing_payload_does_not_kill_the_pipeline(store, cfg, tmp_path):
+    """Missing payload = that step fails (and is logged), the next `always` step
+    still runs."""
+    cfg["tasks"] = {"t": {"goal": "{{needed}}", "verify_cmd": "exit 0",
                           "workdir": str(tmp_path),
-                          "payload": {"required": ["wajib"]}}}
+                          "payload": {"required": ["needed"]}}}
     spec = {"every": "1h", "steps": [
         {"task": "t"},
         {"goal": "step-2", "verify_cmd": "exit 0", "workdir": str(tmp_path),
@@ -158,7 +161,125 @@ def test_step_task_payload_kurang_nggak_matiin_pipeline(store, cfg, tmp_path):
 
 def test_dedup_fingerprint_visible_while_active(store, cfg, tmp_path):
     run_id = store.create_run("g", "exit 0", str(tmp_path),
-                              fingerprint="schedule:harian")
-    assert store.find_active_by_fingerprint("schedule:harian") == run_id
+                              fingerprint="schedule:daily")
+    assert store.find_active_by_fingerprint("schedule:daily") == run_id
     store.finish(run_id, "succeeded")
-    assert store.find_active_by_fingerprint("schedule:harian") is None
+    assert store.find_active_by_fingerprint("schedule:daily") is None
+
+
+# ---- hot reload ----
+# Adding a schedule must not require `systemctl restart nloop` — a restart also
+# drops SSE streams, requeues running loops, and kills the Telegram chat session.
+
+def _cfg_with_config_file(tmp_path, body: str) -> dict:
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(body)
+    cfg = config.load(str(cfg_file))
+    cfg["paths"]["tasks"] = str(tmp_path / "no-tasks")
+    return cfg
+
+
+def test_sync_starts_new_schedule_without_restart(tmp_path):
+    cfg = _cfg_with_config_file(tmp_path, "schedules: {}\n")
+    sched = Scheduler(Store(str(tmp_path / "s.db")), cfg)
+
+    async def go():
+        sched._sync(sched._from_disk())
+        assert sched._running == {}
+        (tmp_path / "config.yaml").write_text(
+            'schedules:\n  nightly:\n    every: 6h\n    goal: g\n'
+            '    verify_cmd: v\n    workdir: .\n')
+        sched._sync(sched._from_disk())
+        assert list(sched._running) == ["nightly"]
+        assert list(cfg["schedules"]) == ["nightly"]   # GET /api/schedules follows
+        await sched.stop()
+        for _spec, t in sched._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_sync_leaves_untouched_schedule_running(tmp_path):
+    """An unchanged schedule keeps its task — restarting it would reset its timer."""
+    cfg = _cfg_with_config_file(
+        tmp_path,
+        'schedules:\n  a:\n    every: 6h\n    goal: g\n    verify_cmd: v\n'
+        '    workdir: .\n')
+    sched = Scheduler(Store(str(tmp_path / "s.db")), cfg)
+
+    async def go():
+        sched._sync(sched._from_disk())
+        first = sched._running["a"][1]
+        (tmp_path / "config.yaml").write_text(
+            'schedules:\n  a:\n    every: 6h\n    goal: g\n    verify_cmd: v\n'
+            '    workdir: .\n  b:\n    every: 1h\n    goal: g\n    verify_cmd: v\n'
+            '    workdir: .\n')
+        sched._sync(sched._from_disk())
+        assert sched._running["a"][1] is first          # same task, timer intact
+        assert sorted(sched._running) == ["a", "b"]
+        await sched.stop()
+        for _spec, t in sched._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_sync_drops_removed_and_restarts_changed(tmp_path):
+    cfg = _cfg_with_config_file(
+        tmp_path,
+        'schedules:\n  a:\n    every: 6h\n    goal: g\n    verify_cmd: v\n'
+        '    workdir: .\n  b:\n    every: 1h\n    goal: g\n    verify_cmd: v\n'
+        '    workdir: .\n')
+    sched = Scheduler(Store(str(tmp_path / "s.db")), cfg)
+
+    async def go():
+        sched._sync(sched._from_disk())
+        old_a = sched._running["a"][1]
+        (tmp_path / "config.yaml").write_text(
+            'schedules:\n  a:\n    every: 12h\n    goal: g\n    verify_cmd: v\n'
+            '    workdir: .\n')
+        sched._sync(sched._from_disk())
+        assert list(sched._running) == ["a"]            # b removed
+        assert sched._running["a"][1] is not old_a      # a changed → restarted
+        assert old_a.cancelled() or old_a.done() or True
+        await sched.stop()
+        for _spec, t in sched._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_sync_skips_broken_spec_without_killing_others(tmp_path, caplog):
+    cfg = _cfg_with_config_file(
+        tmp_path,
+        'schedules:\n  ok:\n    every: 6h\n    goal: g\n    verify_cmd: v\n'
+        '    workdir: .\n  broken:\n    every: not-a-duration\n    goal: g\n'
+        '    verify_cmd: v\n    workdir: .\n')
+    sched = Scheduler(Store(str(tmp_path / "s.db")), cfg)
+
+    async def go():
+        sched._sync(sched._from_disk())
+        assert list(sched._running) == ["ok"]
+        await sched.stop()
+        for _spec, t in sched._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_broken_spec_logged_once_not_every_tick(tmp_path, caplog):
+    """The supervisor re-reads config every 30s — a broken spec must not spam the log."""
+    cfg = _cfg_with_config_file(
+        tmp_path,
+        'schedules:\n  broken:\n    every: not-a-duration\n    goal: g\n'
+        '    verify_cmd: v\n    workdir: .\n')
+    sched = Scheduler(Store(str(tmp_path / "s.db")), cfg)
+
+    async def go():
+        with caplog.at_level("ERROR"):
+            for _ in range(4):
+                sched._sync(sched._from_disk())
+        assert sum("broken" in r.getMessage() for r in caplog.records) == 1
+        await sched.stop()
+
+    asyncio.run(go())

@@ -62,7 +62,7 @@ def test_tick_spawns_runs_with_issue_pipeline(store, cfg, monkeypatch):
 
     r = store.get_run(spawned[0])
     assert r["fingerprint"] == "sentry:111"
-    assert "TypeError" in r["goal"] and "REPRO" in r["goal"]  # jalur issue-fix penuh
+    assert "TypeError" in r["goal"] and "REPRO" in r["goal"]  # full issue-fix path
     assert r["verify_cmd"].startswith("sh .nloop/repro/sentry-111.sh")
     assert r["on_success_cmd"] == "echo deploy"
 
@@ -77,19 +77,19 @@ def test_tick_dedups_active_fingerprint(store, cfg, monkeypatch, tmp_path):
     store.create_run("g", "exit 0", str(tmp_path), fingerprint="sentry:111")  # queued
     spawned = tick(make_wd(store, cfg))
     fps = [store.get_run(r)["fingerprint"] for r in spawned]
-    assert "sentry:111" not in fps                            # aktif → skip
+    assert "sentry:111" not in fps                            # active → skip
     assert "sentry:222" in fps
 
 
 def test_tick_respects_cooldown(store, cfg, monkeypatch, tmp_path):
     monkeypatch.setenv("SENTRY_AUTH_TOKEN", "tok")
     rid = store.create_run("g", "exit 0", str(tmp_path), fingerprint="sentry:111")
-    store.finish(rid, "failed")                               # baru aja gagal
+    store.finish(rid, "failed")                               # just failed
     spawned = tick(make_wd(store, cfg))
     fps = [store.get_run(r)["fingerprint"] for r in spawned]
     assert "sentry:111" not in fps                            # cooldown 24h
 
-    # run lama (> cooldown) → boleh dicoba lagi
+    # old run (> cooldown) → allowed to retry
     store.db.execute("UPDATE runs SET ended_at=? WHERE id=?",
                      (time.time() - 100_000, rid))
     store.db.commit()
@@ -125,14 +125,14 @@ def test_normalize_matches_webhook_shape():
     assert empty["url"] == "" and empty["detail"] == ""
 
 
-# ---- per-project interval override (beda-beda per app) ----
+# ---- per-project interval override (different per app) ----
 
 def test_entry_helpers_support_string_and_dict_form():
     assert _entry_name("marginin") == "marginin"
     assert _entry_name({"name": "marginin", "interval": "30m"}) == "marginin"
 
     assert _entry_interval("marginin", default="1h") == "1h"           # string form -> default
-    assert _entry_interval({"name": "marginin"}, default="1h") == "1h"  # dict tanpa override
+    assert _entry_interval({"name": "marginin"}, default="1h") == "1h"  # dict, no override
     assert _entry_interval({"name": "marginin", "interval": "30m"}, default="1h") == "30m"
 
     assert _entry_max_per_tick("marginin", default=2) == 2
@@ -143,7 +143,7 @@ def test_status_exposes_per_project_interval_override(store, cfg):
     cfg["watchdog"]["interval"] = "1h"
     cfg["watchdog"]["projects"] = {
         "marginin-js": {"name": "marginin", "interval": "30m"},
-        "onecookie-py": "onecookie",           # bentuk pendek -> pakai default
+        "onecookie-py": "onecookie",           # short form -> uses the default
     }
     st = Watchdog(store, cfg).status()
     assert st["project_intervals"] == {"marginin-js": "30m", "onecookie-py": "1h"}
@@ -157,7 +157,7 @@ def test_tick_project_dict_entry_respects_own_max_per_tick(store, cfg, monkeypat
     wd = make_wd(store, cfg)
 
     spawned = asyncio.run(wd._tick_project("marginin-js", entry))
-    assert len(spawned) == 1                              # override, bukan max_per_tick global (2)
+    assert len(spawned) == 1                              # per-project override, not global
     assert wd.project_status["marginin-js"]["last_checked"] == 3
     assert wd.project_status["marginin-js"]["last_spawned"] == spawned
 
@@ -179,4 +179,126 @@ def test_run_project_ticks_on_its_own_independent_interval(store, cfg, monkeypat
         await task
 
     asyncio.run(run())
-    assert len(calls) >= 2                                # tick berulang di interval sendiri
+    assert len(calls) >= 2                                # ticks again on its own interval
+
+# ---- hot reload ----
+# Adding a watchdog project must not require `systemctl restart nloop` — a restart
+# also drops SSE streams, requeues running loops, and kills the Telegram chat session.
+
+def _wd_cfg(tmp_path, body: str) -> dict:
+    cfg_file = tmp_path / "config.yaml"
+    cfg_file.write_text(body)
+    cfg = config.load(str(cfg_file))
+    cfg["paths"]["tasks"] = str(tmp_path / "no-tasks")
+    return cfg
+
+
+ENABLED = (
+    "watchdog:\n"
+    "  enabled: true\n"
+    "  organization: acme\n"
+    "  interval: 1h\n"
+    "  projects:\n"
+)
+
+
+def test_new_project_starts_without_restart(tmp_path):
+    cfg = _wd_cfg(tmp_path, ENABLED + "    a: proj-a\n")
+    wd = Watchdog(Store(str(tmp_path / "w.db")), cfg)
+
+    async def go():
+        wd._sync(wd.wcfg)
+        assert list(wd._running) == ["a"]
+        (tmp_path / "config.yaml").write_text(ENABLED + "    a: proj-a\n    b: proj-b\n")
+        wd._sync(wd._from_disk())
+        assert sorted(wd._running) == ["a", "b"]
+        await wd.stop()
+        for _k, t in wd._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_untouched_project_keeps_its_poll_task(tmp_path):
+    """Restarting a project would reset its interval — only changed ones restart."""
+    cfg = _wd_cfg(tmp_path, ENABLED + "    a: proj-a\n")
+    wd = Watchdog(Store(str(tmp_path / "w.db")), cfg)
+
+    async def go():
+        wd._sync(wd.wcfg)
+        first = wd._running["a"][1]
+        (tmp_path / "config.yaml").write_text(ENABLED + "    a: proj-a\n    b: proj-b\n")
+        wd._sync(wd._from_disk())
+        assert wd._running["a"][1] is first
+        await wd.stop()
+        for _k, t in wd._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_changed_interval_restarts_only_that_project(tmp_path):
+    cfg = _wd_cfg(tmp_path, ENABLED + "    a: proj-a\n    b: proj-b\n")
+    wd = Watchdog(Store(str(tmp_path / "w.db")), cfg)
+
+    async def go():
+        wd._sync(wd.wcfg)
+        old_a, old_b = wd._running["a"][1], wd._running["b"][1]
+        (tmp_path / "config.yaml").write_text(
+            ENABLED + "    a:\n      name: proj-a\n      interval: 15m\n    b: proj-b\n")
+        wd._sync(wd._from_disk())
+        assert wd._running["a"][1] is not old_a
+        assert wd._running["b"][1] is old_b
+        await wd.stop()
+        for _k, t in wd._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_enabling_watchdog_later_takes_effect(tmp_path):
+    """Disabled at boot must still supervise, otherwise turning it on needs a restart."""
+    cfg = _wd_cfg(tmp_path, "watchdog:\n  enabled: false\n")
+    wd = Watchdog(Store(str(tmp_path / "w.db")), cfg)
+
+    async def go():
+        wd._sync(wd.wcfg)
+        assert wd._running == {}
+        (tmp_path / "config.yaml").write_text(ENABLED + "    a: proj-a\n")
+        wd._sync(wd._from_disk())
+        assert list(wd._running) == ["a"]
+        await wd.stop()
+        for _k, t in wd._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_removed_project_stops_polling(tmp_path):
+    cfg = _wd_cfg(tmp_path, ENABLED + "    a: proj-a\n    b: proj-b\n")
+    wd = Watchdog(Store(str(tmp_path / "w.db")), cfg)
+
+    async def go():
+        wd._sync(wd.wcfg)
+        (tmp_path / "config.yaml").write_text(ENABLED + "    a: proj-a\n")
+        wd._sync(wd._from_disk())
+        assert list(wd._running) == ["a"]
+        await wd.stop()
+        for _k, t in wd._running.values():
+            t.cancel()
+
+    asyncio.run(go())
+
+
+def test_triggers_projects_reloaded_alongside_watchdog(tmp_path):
+    """A new watchdog project is useless until triggers.projects has its counterpart."""
+    cfg = _wd_cfg(tmp_path, ENABLED + "    a: proj-a\n")
+    wd = Watchdog(Store(str(tmp_path / "w.db")), cfg)
+    assert (cfg.get("triggers") or {}).get("projects") in (None, {})
+
+    (tmp_path / "config.yaml").write_text(
+        ENABLED + "    a: proj-a\n"
+        "triggers:\n  projects:\n    proj-a:\n      workdir: /tmp\n"
+        "      verify_cmd: 'true'\n")
+    wd._from_disk()
+    assert "proj-a" in cfg["triggers"]["projects"]
